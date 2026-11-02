@@ -17,6 +17,10 @@ import {
   NEGATIVE_ACTIONS,
   PAGE_CONTEXTS,
   PROFILE_ID,
+  RELAX_GROUP,
+  RELAX_GROUP_RATIO,
+  RELAX_GROUP_WEIGHT,
+  RELAX_INTENT_RE,
   RING_CAPACITY,
   SCHEMA_VERSION,
   THRESHOLDS,
@@ -624,6 +628,51 @@ function extractExclusions(text) {
  * @param {string} [intentMode]
  * @param {{profile_id?:string, updated_at?:number, version?:number}} [options] 时间与版本由调用方注入（本函数不读时钟）
  */
+/**
+ * 「放松」兜底：模型（或关键词）可能把"放松身心"当成噪声整块丢掉。
+ * 命中（intent_mode=relax 或文本提到放松类词）时，给 RELAX_GROUP 固定 RELAX_GROUP_WEIGHT 份额，
+ * 其余主题按原比例分享剩下的份额；未命中时**原样返回**，不改动用户明说的单一主题。
+ * 纯函数：不读时钟、不联网、同输入同输出。
+ * @param {Array<{t:string,w:number}>} topics
+ * @param {string} intentMode
+ * @param {string} text
+ */
+export function applyRelaxIntent(topics, intentMode, text) {
+  const matched = intentMode === "relax" || RELAX_INTENT_RE.test(typeof text === "string" ? text : "");
+  if (!matched) return topics;
+  const list = Array.isArray(topics) ? topics : [];
+  const others = list.filter((entry) => entry && TOPICS.includes(entry.t) && entry.w > 0 && !RELAX_GROUP.includes(entry.t));
+  const relaxRaw = RELAX_GROUP.map((t) => ({ t, w: RELAX_GROUP_WEIGHT * (RELAX_GROUP_RATIO[t] ?? 0) }));
+  const otherTotal = others.reduce((acc, entry) => acc + entry.w, 0);
+  const restBudget = 1 - RELAX_GROUP_WEIGHT;
+  const otherRaw = otherTotal > 0 ? others.map((entry) => ({ t: entry.t, w: (entry.w / otherTotal) * restBudget })) : [];
+
+  const merged = [...relaxRaw, ...otherRaw].filter((entry) => entry.w >= GOAL_MIN_TOPIC_WEIGHT);
+  if (merged.length === 0) return topics;
+  merged.sort((a, b) => b.w - a.w || (TOPIC_ORDER.get(a.t) ?? 0) - (TOPIC_ORDER.get(b.t) ?? 0));
+  const kept = merged.slice(0, GOAL_TOPIC_LIMIT);
+
+  // 4 个主题的上限可能砍掉组内成员，但组的总份额不能让给别的主题：
+  // 存活成员仍按 RELAX_GROUP_WEIGHT 占比分配，其余主题按原比例分享剩余部分。
+  const keptRelax = kept.filter((entry) => RELAX_GROUP.includes(entry.t));
+  const keptOther = kept.filter((entry) => !RELAX_GROUP.includes(entry.t));
+  const relaxSum = keptRelax.reduce((acc, entry) => acc + entry.w, 0);
+  const otherSum = keptOther.reduce((acc, entry) => acc + entry.w, 0);
+  const out = [];
+  if (keptRelax.length && keptOther.length) {
+    for (const entry of keptRelax) out.push({ t: entry.t, w: round((entry.w / relaxSum) * RELAX_GROUP_WEIGHT) });
+    for (const entry of keptOther) out.push({ t: entry.t, w: round((entry.w / otherSum) * restBudget) });
+  } else {
+    const only = keptRelax.length ? keptRelax : keptOther;
+    const sum = only.reduce((acc, entry) => acc + entry.w, 0);
+    for (const entry of only) out.push({ t: entry.t, w: round(entry.w / sum) });
+  }
+  out.sort((a, b) => b.w - a.w || (TOPIC_ORDER.get(a.t) ?? 0) - (TOPIC_ORDER.get(b.t) ?? 0));
+  const total = out.reduce((acc, entry) => acc + entry.w, 0);
+  if (!(total > 0)) return topics;
+  return out;
+}
+
 export function parseGoalText(text, intentMode, options = {}) {
   const trimmed = typeof text === "string" ? text.trim() : "";
   const intent = INTENT_MODES.includes(intentMode) ? intentMode : "relax";

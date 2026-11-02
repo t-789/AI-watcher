@@ -106,6 +106,7 @@ async function runServer({ dataDir: dir, port: listenPort }) {
     clock,
     parseGoal: typeof core?.parseGoalText === "function" ? core.parseGoalText : null,
     structureGoal: typeof ai.structureGoal === "function" ? (input) => ai.structureGoal(input) : null,
+    applyRelaxIntent: typeof core?.applyRelaxIntent === "function" ? core.applyRelaxIntent : null,
     port: listenPort,
     version: constants.SCHEMA_VERSION,
     profileId: constants.PROFILE_ID,

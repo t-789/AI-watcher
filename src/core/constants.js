@@ -85,5 +85,12 @@ export const GOAL_MIN_TOPIC_WEIGHT = 0.05;
 // 目标主题上限：避免画像里塞进一堆 5% 的碎片。
 export const GOAL_TOPIC_LIMIT = 4;
 
+// 「放松」是正当目标（用户裁决），不是噪声：命中 relax 意图或文本出现放松类词时，
+// 为这组主题保留固定份额，避免模型把它整块丢掉。组内比例固定，保证可复现。
+export const RELAX_GROUP = ["game", "anime", "film_tv"];
+export const RELAX_GROUP_WEIGHT = 0.4;
+export const RELAX_GROUP_RATIO = { game: 0.5, anime: 0.3, film_tv: 0.2 };
+export const RELAX_INTENT_RE = /放松|轻松|休息|解压|消遣|休闲|娱乐|摸鱼|打发时间/;
+
 // 环形队列表（RingWindow）的计数键前缀：同一张计数表同时维护主题权重、主题出现次数、来源次数。
 export const COUNTER_PREFIX = { topicWeight: "tw:", topicCount: "tc:", source: "src:" };

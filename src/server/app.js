@@ -46,6 +46,8 @@ export function createApp(deps = {}) {
   const parseGoal = typeof deps.parseGoal === "function" ? deps.parseGoal : null;
   // 目标结构化优先走模型（契约：自然语言目标 + 意图模式 → 主题权重），失败/无 key 再退回关键词兜底。
   const structureGoal = typeof deps.structureGoal === "function" ? deps.structureGoal : null;
+  // 「放松」是正当目标：模型/关键词都可能把这块丢掉，所以最后统一走一遍确定性兜底。
+  const applyRelaxIntent = typeof deps.applyRelaxIntent === "function" ? deps.applyRelaxIntent : null;
   const port = deps.port ?? CONTRACT_VALUES.PORT;
   const version = deps.version ?? CONTRACT_VALUES.SCHEMA_VERSION;
   const profileId = deps.profileId ?? CONTRACT_VALUES.PROFILE_ID;
@@ -304,6 +306,14 @@ export function createApp(deps = {}) {
         }
       } catch {
         // 关键词兜底失败就保留空主题表：宁可"未知"，也不编造目标主题
+      }
+    }
+    if (applyRelaxIntent) {
+      try {
+        const relaxed = normaliseTopics(applyRelaxIntent(goalTopics, intentMode, goalText), { maxWeight: Infinity });
+        if (relaxed && relaxed.length) goalTopics = relaxed;
+      } catch {
+        // 兜底失败保留原有主题表，不影响保存
       }
     }
     const goal = {

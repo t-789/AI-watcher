@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { createApp } from "../../src/server/app.js";
+import { applyRelaxIntent } from "../../src/core/index.js";
 import { createFakeLabeler, createFakeStore, fakeSnapshot, startServer, callHttp } from "./_helpers.mjs";
 
 const NOW = 1700000000000;
@@ -14,6 +15,7 @@ async function harness(options = {}) {
     clock: { now: () => NOW },
     parseGoal: options.parseGoal ?? null,
     structureGoal: options.structureGoal ?? null,
+    applyRelaxIntent: options.applyRelaxIntent ?? null,
   });
   const server = await startServer(app);
   return { ...server, store };
@@ -128,4 +130,35 @@ test("整数 0 与 negative 权重被丢弃；body 显式 goal_topics 且无解�
   });
   assert.equal(response.json.source, "user");
   assert.deepEqual(response.json.goal_topics.map((x) => x.t), ["tech"]);
+});
+
+test("「放松」兜底：AI 与关键词两条路径都会补上放松组，source 语义不变", async (t) => {
+  const cases = [
+    ["ai", { structureGoal: async () => ({ topics: [{ t: "news", w: 0.4 }, { t: "science", w: 0.35 }, { t: "tech", w: 0.25 }], model: "deepseek-chat", degraded: false }) }],
+    ["keyword", { parseGoal: () => ({ goal_topics: [{ t: "news", w: 0.5 }, { t: "science", w: 0.5 }] }) }],
+  ];
+  for (const [name, deps] of cases) {
+    const app = await harness({ ...deps, applyRelaxIntent });
+    t.after(() => app.close());
+    const response = await callHttp(app.url, "POST", "/api/goal", {
+      goal_text: "在课余时间放松身心，顺便学一些有用的小知识，了解一些时事",
+      intent_mode: "relax",
+    });
+    assert.equal(response.json.source, name, name + " 路径的 source 不应被兜底改动");
+    const relax = response.json.goal_topics.filter((x) => ["game", "anime", "film_tv"].includes(x.t));
+    const relaxSum = relax.reduce((acc, x) => acc + x.w, 0);
+    assert.ok(Math.abs(relaxSum - 0.4) <= 0.01, name + " 路径放松组合计应为 0.4，实际 " + relaxSum.toFixed(4));
+    const total = response.json.goal_topics.reduce((acc, x) => acc + x.w, 0);
+    assert.ok(Math.abs(total - 1) <= 1e-2, name + " 路径权重和应为 1，实际 " + total);
+  }
+});
+
+test("「放松」兜底不误伤：intent=exam 且文本无放松词时主题表保持原样", async (t) => {
+  const app = await harness({
+    parseGoal: () => ({ goal_topics: [{ t: "study", w: 0.7 }, { t: "science", w: 0.3 }] }),
+    applyRelaxIntent,
+  });
+  t.after(() => app.close());
+  const response = await callHttp(app.url, "POST", "/api/goal", { goal_text: "准备期末考试", intent_mode: "exam" });
+  assert.deepEqual(response.json.goal_topics.map((x) => x.t), ["study", "science"]);
 });
