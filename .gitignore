@@ -1,2 +1,11 @@
 /ignore/*
 *.DS_Store
+node_modules/
+data/
+dist/
+.cache/
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+npm-debug.log*

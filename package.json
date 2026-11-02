@@ -1,0 +1,19 @@
+{
+  "name": "ai-watcher",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "AI Watcher — 观察你实际刷到的B站推荐内容，对照你的目标做兴趣分析（课程功能 demo）",
+  "engines": {
+    "node": ">=22.5"
+  },
+  "scripts": {
+    "start": "node src/server/main.js",
+    "demo": "node src/server/main.js --replay --seed --data-dir data-demo && node src/server/main.js --data-dir data-demo",
+    "replay": "node src/server/main.js --replay",
+    "chrome": "node scripts/start-chrome.mjs",
+    "test": "node --test tests/",
+    "check": "node --test tests/ && node tools/check-extension.mjs",
+    "accept": "node tools/e2e/acceptance.mjs"
+  }
+}

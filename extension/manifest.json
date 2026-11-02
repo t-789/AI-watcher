@@ -1,0 +1,38 @@
+{
+  "manifest_version": 3,
+  "name": "AI Watcher · B站观察",
+  "version": "0.1.0",
+  "description": "把这一页看得见的内容上报到本地 127.0.0.1:3789，并在右下角显示悬浮窗画像。",
+  "permissions": [
+    "storage"
+  ],
+  "host_permissions": [
+    "http://127.0.0.1:3789/*"
+  ],
+  "background": {
+    "service_worker": "background.js",
+    "type": "module"
+  },
+  "content_scripts": [
+    {
+      "matches": [
+        "*://*.bilibili.com/*"
+      ],
+      "js": [
+        "content/capture.js",
+        "content/overlay.js"
+      ],
+      "run_at": "document_idle"
+    }
+  ],
+  "web_accessible_resources": [
+    {
+      "resources": [
+        "extract.js"
+      ],
+      "matches": [
+        "*://*.bilibili.com/*"
+      ]
+    }
+  ]
+}
