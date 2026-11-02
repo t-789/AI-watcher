@@ -157,6 +157,30 @@ test("首屏只保留比例数字：条形不带条数、目标不带权重", ()
   return "条形=百分比，目标=标签";
 });
 
+test("重绘受指纹与编辑态保护（不打断用户、不白刷 DOM）", () => {
+  const src = read("extension/content/overlay.js");
+  assert(/function profileFingerprint\(p\)/.test(src), "缺少 profileFingerprint");
+  assert(/function isEditing\(\)/.test(src), "缺少 isEditing 编辑态判断");
+  assert(/if \(!force && \(fp === ui\.renderedFp \|\| ui\.goalDirty \|\| isEditing\(\)\)\)/.test(src), "refreshProfile 未做指纹/脏/焦点三重短路");
+  assert(/ui\.renderedFp = profileFingerprint\(ui\.profile\)/.test(src), "render 结束时未记录已渲染指纹");
+  assert(/\}, 20000\);/.test(src), "画像轮询未放宽到 20s");
+  assert(!/if \(ui\.open\) refreshProfile\(\)\.catch\(\(\) => \{\}\);\n  \}, 10000\);/.test(src), "画像轮询仍是 10s");
+  assert(/const detailsOpen = prevDetails \? prevDetails\.open : false/.test(src) && /nextDetails\.open = detailsOpen/.test(src), "重绘未保留 <details> 展开态");
+  assert(/const scroll = body\.scrollTop/.test(src) && /body\.scrollTop = scroll/.test(src), "重绘未保留滚动位置");
+  return "指纹 + 脏标记 + 焦点三重短路，保 details/scroll";
+});
+
+test("目标输入草稿常驻，重绘不丢；有手动刷新与 renderSeq", () => {
+  const src = read("extension/content/overlay.js");
+  assert(/area\.value = ui\.goalDraft/.test(src), "textarea 初值未取自 ui.goalDraft");
+  assert(/ui\.goalDraft = area\.value/.test(src), "input 事件未同步草稿");
+  assert(/ui\.goalDirty = area\.value\.trim\(\) !== saved/.test(src), "未按「值≠已保存目标」计算脏标记");
+  assert(/host\.dataset\.renderSeq = String\(ui\.renderSeq\)/.test(src), "缺少 dataset.renderSeq 观测点");
+  assert(/refreshBtn\.dataset\.role = "refresh"/.test(src), "操作区缺少手动刷新按钮");
+  assert(/refreshProfile\(\{ force: true \}\)/.test(src), "手动刷新未走 force");
+  return "草稿 + dirty + renderSeq + 手动刷新";
+});
+
 const failures = [];
 let passed = 0;
 for (const { name, fn } of cases) {

@@ -97,7 +97,8 @@ tools/              check-extension.mjs · e2e/acceptance.mjs
 5. **行为门槛要够样本**：`open`+`watch` 对同一视频合并成 1 个行为样本，算法要求 ≥10 个才计算 `D(U,P)`。单次会话点 1—3 个视频时界面会写"有效正向行为 N 条，低于门槛 10"而不是硬给一个数。实测连续点开 10 个视频后 `sample_n=10`、`D(U,P)=0.2427`（脚本：`node tools/e2e/behavior-session.mjs`）。
 6. **AI 会抖动**：同一内容打标结果可能不同；缓存按内容哈希，所以重复曝光不会重复花钱。无 key / 断网时自动降级为关键词词典 + 模板句，标注状态写 `unknown`，不冒充 AI 结果。
 7. **不做**：事件维度覆盖与互补参考推荐、平台评测报告、手机跨 App 监测（这些在规划书里是 P1/P2，见 `docs/MOBILE-PATH.md`）。
-8. **符号链接**：`extension/extract.js` 是指向 `src/adapters/bilibili/extract.js` 的 symlink，macOS/Linux 正常，Windows 上 clone 会成为断链（需要把文件复制过去，或改构建步骤）。
+8. **手动刷新会丢焦点**：抽屉"刷新"按钮重绘后输入框内容保留，但焦点不回到输入框（打字期间的自动重绘已被草稿保护挡住，不会发生）；可接受的残留。
+9. **符号链接**：`extension/extract.js` 是指向 `src/adapters/bilibili/extract.js` 的 symlink，macOS/Linux 正常，Windows 上 clone 会成为断链（需要把文件复制过去，或改构建步骤）。
 
 ## 边界声明（答辩口径）
 

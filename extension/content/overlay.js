@@ -17,11 +17,16 @@
   ];
   const STYLE = "\n:host { all: initial; }\n.aw-wrap, .aw-wrap * { box-sizing: border-box; margin: 0; padding: 0; }\n.aw-wrap {\n  font-family: -apple-system, BlinkMacSystemFont, \"Segoe UI\", \"PingFang SC\", \"Hiragino Sans GB\", \"Microsoft YaHei\", sans-serif;\n  font-size: 12px; line-height: 1.5; color: #1b1f27; text-align: left;\n}\n.aw-fixed { position: absolute; right: 18px; bottom: 18px; width: 330px; display: flex; flex-direction: column; align-items: flex-end; gap: 6px; pointer-events: none; }\n.aw-caption {\n  pointer-events: none; background: rgba(20, 24, 32, 0.82); color: #e9edf5; border-radius: 999px;\n  padding: 3px 9px; font-size: 10px; letter-spacing: .2px; white-space: nowrap; backdrop-filter: blur(4px); font-variant-numeric: tabular-nums;\n}\n.aw-ball {\n  pointer-events: auto; cursor: pointer; width: 66px; height: 66px; border-radius: 50%; border: 0;\n  background: radial-gradient(circle at 30% 25%, #4f8cff, #2b5dd7 60%, #1f43a3);\n  color: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 1px;\n  box-shadow: 0 8px 24px rgba(31, 67, 163, .35); font-size: 12px; transition: transform .15s ease, background .2s ease;\n}\n.aw-ball:hover { transform: translateY(-2px); }\n.aw-fixed[data-open=\"1\"] { display: none; }\n.aw-ball[data-offline=\"1\"] { background: radial-gradient(circle at 30% 25%, #9aa3af, #6b7482 60%, #4f5765); box-shadow: 0 6px 18px rgba(60, 66, 78, .3); }\n.aw-ball-count { font-size: 20px; font-weight: 700; line-height: 1; font-variant-numeric: tabular-nums; }\n.aw-ball-topic { max-width: 58px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 9px; opacity: .9; }\n.aw-ball-off { font-size: 11px; font-weight: 600; text-align: center; line-height: 1.25; }\n.aw-drawer {\n  position: absolute; right: 0; bottom: 0; width: 396px; height: 100vh; background: #fffdfa;\n  border-left: 1px solid #e6e1d8; box-shadow: -12px 0 32px rgba(24, 28, 36, .12);\n  display: flex; flex-direction: column; pointer-events: auto; z-index: 2;\n}\n.aw-drawer[hidden] { display: none; }\n.aw-head { padding: 10px 14px; border-bottom: 1px solid #ece7de; background: #f7f3ec; }\n.aw-title-row { display: flex; align-items: center; justify-content: space-between; gap: 8px; }\n.aw-title { font-size: 13px; font-weight: 700; }\n.aw-close { border: 0; background: transparent; cursor: pointer; font-size: 15px; color: #6d6558; padding: 2px 4px; }\n.aw-chips { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 5px; }\n.aw-chip { border-radius: 4px; padding: 1px 6px; font-size: 10px; background: #ece6da; color: #4a4438; font-variant-numeric: tabular-nums; }\n.aw-chip[data-mode=\"real\"] { background: #d8f0dd; color: #1c6b34; }\n.aw-chip[data-mode=\"synthetic\"] { background: #fde4c8; color: #8a4a08; }\n.aw-chip[data-mode=\"mixed\"] { background: #e6e0fb; color: #45318f; }\n.aw-chip[data-mode=\"empty\"] { background: #eee; color: #666; }\n.aw-chip[data-tone=\"warn\"] { background: #ffe1d6; color: #9a3412; }\n.aw-body { flex: 1; overflow-y: auto; padding: 10px 14px 18px; }\n.aw-sec { border: 1px solid #ece7de; border-radius: 8px; padding: 9px 10px; margin-bottom: 9px; background: #fff; }\n.aw-sec > h2 { font-size: 11px; font-weight: 700; color: #6d6558; letter-spacing: .6px; margin-bottom: 6px; }\n.aw-kv { display: grid; grid-template-columns: 84px 1fr; gap: 2px 8px; font-variant-numeric: tabular-nums; }\n.aw-kv dt { color: #857c6c; }\n.aw-kv dd { color: #262c36; word-break: break-word; }\n.aw-muted { color: #857c6c; }\n.aw-warn { color: #9a3412; }\n.aw-bar-row { display: grid; grid-template-columns: 92px 1fr 62px; align-items: center; gap: 6px; margin: 3px 0; }\n.aw-bar-label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: #40453f; }\n.aw-bar-track { background: #f0ece3; border-radius: 3px; height: 9px; overflow: hidden; }\n.aw-bar-fill { height: 100%; background: linear-gradient(90deg, #5b8def, #3454c8); border-radius: 3px; }\n.aw-bar-val { text-align: right; color: #6d6558; font-variant-numeric: tabular-nums; white-space: nowrap; }\n.aw-diff { display: grid; grid-template-columns: 92px 1fr 62px; align-items: center; gap: 6px; margin: 3px 0; }\n.aw-diff-mid { position: relative; height: 9px; background: #f4f1ea; border-radius: 3px; }\n.aw-diff-mid::after { content: \"\"; position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: #d7d2c7; }\n.aw-diff-pos, .aw-diff-neg { position: absolute; top: 0; height: 100%; border-radius: 3px; }\n.aw-diff-pos { background: #4c9a63; left: 50%; }\n.aw-diff-neg { background: #c6663f; right: 50%; }\n.aw-alert { border-left: 3px solid #e0b34a; padding: 5px 0 5px 8px; margin-bottom: 7px; }\n.aw-alert[data-sev=\"warn\"] { border-color: #c9622f; }\n.aw-alert-title { font-weight: 700; }\n.aw-alert-detail { color: #4a4438; }\n.aw-alert-sug { color: #2c5f43; margin-top: 2px; }\n.aw-ev { display: flex; flex-direction: column; gap: 1px; margin-top: 3px; }\n.aw-ev a { color: #2b5dd7; text-decoration: none; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }\n.aw-ev a:hover { text-decoration: underline; }\n.aw-notes { background: #f7f3ec; border-radius: 6px; padding: 6px 8px; color: #4a4438; }\n.aw-notes li { margin-left: 14px; }\n.aw-row { display: flex; gap: 6px; align-items: center; }\n.aw-field { display: flex; flex-direction: column; gap: 5px; }\n.aw-input, .aw-select {\n  width: 100%; border: 1px solid #ddd6c8; border-radius: 6px; padding: 5px 7px; font-size: 12px;\n  font-family: inherit; background: #fff; color: #1b1f27; resize: vertical;\n}\n.aw-btn {\n  border: 1px solid #cfc7b7; background: #fff; color: #2c323c; border-radius: 6px; padding: 4px 9px;\n  font-size: 11px; cursor: pointer; font-family: inherit;\n}\n.aw-btn:hover { background: #f4f1ea; }\n.aw-btn[data-primary=\"1\"] { background: #2b5dd7; border-color: #2b5dd7; color: #fff; }\n.aw-btn[data-primary=\"1\"]:hover { background: #244fb8; }\n.aw-btn[data-danger=\"1\"] { color: #9a3412; border-color: #e8c3b1; }\n.aw-btn:disabled { opacity: .55; cursor: default; }\n.aw-status { margin-top: 6px; font-size: 11px; color: #6d6558; min-height: 15px; }\n.aw-sug-item { border-top: 1px dashed #ece7de; padding-top: 5px; margin-top: 5px; }\n.aw-sug-title { font-weight: 700; }\n.aw-foot { font-size: 10px; color: #99917f; margin-top: 4px; }\n";
 
-  const ui = { open: false, status: null, profile: null, online: null, goalBusy: false, actionMsg: "" };
+  const ui = {
+    open: false, status: null, profile: null, online: null, goalBusy: false, actionMsg: "",
+    goalDraft: "", goalDirty: false, goalMode: null,
+    renderedFp: "", renderSeq: 0, drawing: false,
+  };
 
   const host = document.createElement("div");
   host.id = HOST_ID;
   host.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;z-index:2147483000;";
+  host.dataset.renderSeq = "0";
   const shadow = host.attachShadow({ mode: "open" });
   const styleEl = document.createElement("style");
   styleEl.textContent = STYLE;
@@ -236,10 +241,19 @@
     const form = h("div", "aw-field");
     const area = h("textarea", "aw-input");
     area.rows = 2;
+    area.dataset.role = "goal-input";
     area.placeholder = "用一句话写下你这次想达成什么，例如：两周内搞懂注意力机制，少刷纯娱乐";
+    area.value = ui.goalDraft;
+    area.addEventListener("input", () => {
+      ui.goalDraft = area.value;
+      const saved = goal && goal.present ? String(goal.text || "").trim() : "";
+      ui.goalDirty = area.value.trim() !== saved;
+    });
     const row = h("div", "aw-row");
     const sel = h("select", "aw-select");
     sel.style.maxWidth = "150px";
+    if (ui.goalMode) sel.value = ui.goalMode;
+    sel.addEventListener("change", () => { ui.goalMode = sel.value; });
     for (const [value, textValue] of INTENT_MODES) {
       const opt = h("option", null, textValue);
       opt.value = value;
@@ -261,8 +275,10 @@
       btn.disabled = false;
       if (res && res.ok) {
         status.textContent = "已保存：" + (res.data && res.data.intent_mode ? res.data.intent_mode : sel.value);
+        ui.goalDraft = "";
+        ui.goalDirty = false;
         area.value = "";
-        await refreshProfile();
+        await refreshProfile({ force: true });
       } else {
         status.textContent = "保存失败：" + ((res && res.error && res.error.message) || "本地服务未启动");
       }
@@ -431,6 +447,15 @@
       ui.actionMsg = res && res.ok ? (next ? "采集已暂停。" : "采集已恢复。") : "切换失败：" + ((res && res.error && res.error.message) || "服务未启动");
       render();
     });
+    const refreshBtn = h("button", "aw-btn", "刷新");
+    refreshBtn.type = "button";
+    refreshBtn.dataset.role = "refresh";
+    refreshBtn.addEventListener("click", async () => {
+      refreshBtn.disabled = true;
+      await refreshStatus();
+      ui.actionMsg = "已刷新。";
+      await refreshProfile({ force: true });
+    });
     const exportBtn = h("button", "aw-btn", "导出 JSONL");
     exportBtn.type = "button";
     exportBtn.addEventListener("click", async () => {
@@ -462,6 +487,7 @@
       await refreshProfile();
     });
     row.appendChild(pauseBtn);
+    row.appendChild(refreshBtn);
     row.appendChild(exportBtn);
     row.appendChild(resetBtn);
     sec.appendChild(row);
@@ -602,18 +628,55 @@
     el.textContent = bits.join(" · ");
   }
 
+  // 指纹：只有这些字段变了才值得重绘；数据没变就不碰 DOM。
+  function profileFingerprint(p) {
+    if (!p) return "";
+    const w = p.window || {};
+    return [
+      p.data_mode,
+      w.start, w.exposure_count, w.unique_items, w.action_count,
+      (p.alerts || []).map((a) => a.rule_id).join(","),
+      p.ai && p.ai.narrative ? String(p.ai.narrative.length) + (p.ai.narrative_cached ? "c" : "") : "0",
+      (p.recommendations || []).map((r) => r.content_id).join(","),
+      p.goal && p.goal.present ? String(p.goal.updated_at || "") + "|" + String(p.goal.text || "") : "none",
+    ].join("~");
+  }
+
+  // 用户正在输入/选择时不许重绘，否则文字会被清空。
+  function isEditing() {
+    const el = shadow.activeElement;
+    if (!el || !el.tagName) return false;
+    return el.tagName === "TEXTAREA" || el.tagName === "INPUT" || el.tagName === "SELECT";
+  }
+
   function render() {
-    renderChips();
-    nodes.body.textContent = "";
-    renderConclusion(nodes.body);
-    renderExposure(nodes.body);
-    renderSuggestions(nodes.body);
-    renderRecommendations(nodes.body);
-    renderGoal(nodes.body);
-    renderDetails(nodes.body);
-    renderActions(nodes.body);
-    renderFooter();
-    renderBall();
+    if (ui.drawing) return;
+    ui.drawing = true;
+    try {
+      const body = nodes.body;
+      const scroll = body.scrollTop;
+      const prevDetails = body.querySelector("details");
+      const detailsOpen = prevDetails ? prevDetails.open : false;
+      ui.renderSeq += 1;
+      host.dataset.renderSeq = String(ui.renderSeq);
+      renderChips();
+      body.textContent = "";
+      renderConclusion(nodes.body);
+      renderExposure(nodes.body);
+      renderSuggestions(nodes.body);
+      renderRecommendations(nodes.body);
+      renderGoal(nodes.body);
+      renderDetails(nodes.body);
+      renderActions(nodes.body);
+      renderFooter();
+      const nextDetails = body.querySelector("details");
+      if (nextDetails) nextDetails.open = detailsOpen;
+      body.scrollTop = scroll;
+      ui.renderedFp = profileFingerprint(ui.profile);
+      renderBall();
+    } finally {
+      ui.drawing = false;
+    }
   }
 
   function renderBallOnly() {
@@ -629,10 +692,17 @@
     return ui.online;
   }
 
-  async function refreshProfile() {
+  async function refreshProfile(options) {
+    const force = !!(options && options.force);
     const res = await send({ type: "profile", days: 7 });
     if (res && res.ok) ui.profile = res.data;
     else if (res && res.status === 0) ui.online = false;
+    const fp = profileFingerprint(ui.profile);
+    // 指纹没变、或用户正在编辑 → 完全不碰 DOM（球上的数字照常刷新）。
+    if (!force && (fp === ui.renderedFp || ui.goalDirty || isEditing())) {
+      renderBall();
+      return res;
+    }
     render();
     return res;
   }
@@ -661,12 +731,14 @@
     })
     .catch(() => {});
 
+  // 抽屉关着时只刷球上的数字（5s，不重绘）；抽屉打开时画像 20s 一次，且受指纹与编辑态约束。
   setInterval(() => {
     refreshStatus().catch(() => {});
-  }, 3000);
+  }, 5000);
   setInterval(() => {
-    if (ui.open) refreshProfile().catch(() => {});
-  }, 10000);
+    if (!ui.open) return;
+    refreshProfile().catch(() => {});
+  }, 20000);
 
   const api = globalThis.__aiWatcher;
   if (api && typeof api.subscribe === "function") {
