@@ -69,7 +69,8 @@ npm run demo     # 把 fixtures/replay-14d.jsonl（14 天合成日志，680 条�
 | `npm run chrome` | 用独立 profile 启动一个装好本扩展的 Chrome |
 | `npm test` | 全部单测（146 条：core 73 / server 68 / ext 5） |
 | `npm run check` | 单测 + 扩展静态检查（manifest / 单一事实来源 / fetch 只在 background） |
-| `npm run accept` | 真机端到端验收：装扩展 → 真 B 站 → 悬浮球/抽屉/画像 → 停机降级（需 puppeteer-core，见 `ignore/temp/e2e-deps`） |
+| `npm run accept` | 真机端到端验收：装扩展 → 真 B 站 → 悬浮球/抽屉/画像 → 停机降级（需 puppeteer-core：`mkdir -p ignore/temp/e2e-deps && cd ignore/temp/e2e-deps && npm i puppeteer-core`，或 `npm i -D puppeteer-core`） |
+| `node tools/e2e/behavior-session.mjs` | 行为门槛补证：连续点开 10 个视频，验证 `behavior.available` 与 `D(U,P)` 真的能算出来 |
 
 服务端参数：`--port`、`--data-dir`、`--replay`、`--seed`（配 `--replay`，灌进服务同款库）、`--append`、`--fixtures`。
 

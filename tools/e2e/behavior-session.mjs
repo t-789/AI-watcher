@@ -7,6 +7,10 @@ import { setTimeout as sleep } from "node:timers/promises";
 
 const ROOT = "/Users/liuzy/Desktop/AI-watcher";
 const require = createRequire(ROOT + "/ignore/temp/e2e-deps/");
+try { require.resolve("puppeteer-core"); } catch {
+  console.error("缺少 puppeteer-core。任选其一：\n  mkdir -p ignore/temp/e2e-deps && cd ignore/temp/e2e-deps && npm i puppeteer-core\n  npm i -D puppeteer-core");
+  process.exit(2);
+}
 const puppeteer = require("puppeteer-core");
 const CHROME = "/Applications/Google Chrome.app/Contents/MacOS/Google Chrome";
 const PORT = 3789, CDP = 9413;
