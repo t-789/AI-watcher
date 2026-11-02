@@ -220,11 +220,15 @@ test("窗口统计：page_contexts / session_count / action_count / unique_items
     mkAction("a3", "i1", "open", NOW - 9 * DAY, { sessionId: "s_old" }),
   ];
   const s = snap({ items, exposures, actions });
+  // 观察条件按全部曝光统计（含搜索页）
   assert.deepEqual(s.window.page_contexts, { home: 2, video_related: 1, search: 1 });
   assert.equal(s.window.action_count, 2);
   assert.equal(s.window.session_count, 3);
-  assert.equal(s.window.unique_items, 2);
-  assert.equal(s.exposure.unique_items, 2);
+  // 契约 §10.1：曝光画像 P 只算 home / video_related，搜索页单独计数
+  assert.equal(s.window.exposure_count, 3);
+  assert.equal(s.window.search_pull_count, 1);
+  assert.equal(s.exposure.unique_items, 1);
+  assert.equal(s.window.unique_items, 1);
 });
 
 test("来源集中：top_source 同分按来源 id 升序，share 的分母是已知来源曝光数", () => {
@@ -287,7 +291,9 @@ test("非法记录被忽略而不是抛异常", () => {
     actions: [null, { action_id: "x" }],
     goal: null,
   });
-  assert.equal(s.window.exposure_count, 1);
+  // 缺 content_id 且缺 page_context 的曝光无法归属，按契约 §10.1 不进曝光画像 P（但也不抛异常）
+  assert.equal(s.window.exposure_count, 0);
+  assert.equal(s.window.search_pull_count, 0);
   assert.equal(s.exposure.available, false);
   assert.deepEqual(s.alerts, []);
 });
@@ -307,10 +313,11 @@ test("双跑同一输入逐字节一致（确定性）", () => {
   assert.equal(JSON.stringify(input), before);
 });
 
-test("PAGE_CONTEXTS 之外的上下文不进入统计键，但曝光仍计入总数", () => {
+test("PAGE_CONTEXTS 之外的上下文：不成为统计键，也不计入曝光画像 P", () => {
   const exposures = burst("x", "i_tech", 20).map((e, i) => (i === 0 ? { ...e, page_context: "unknown_ctx" } : e));
   const s = snap({ items: techItems(), exposures });
-  assert.equal(s.window.exposure_count, 20);
+  // 20 条里有 1 条上下文未知：它既不是已知上下文，也不属于 home/video_related，因此不进 P
+  assert.equal(s.window.exposure_count, 19);
   assert.equal(s.window.page_contexts.home, 19);
   assert.equal(Object.keys(s.window.page_contexts).length, PAGE_CONTEXTS.length);
 });

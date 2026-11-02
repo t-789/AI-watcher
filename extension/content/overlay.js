@@ -27,6 +27,27 @@
   styleEl.textContent = STYLE;
   shadow.appendChild(styleEl);
 
+  const styleEl2 = document.createElement("style");
+  styleEl2.textContent = [
+    ".aw-concl { font-size: 13px; font-weight: 700; line-height: 1.45; display: -webkit-box; -webkit-line-clamp: 1; -webkit-box-orient: vertical; overflow: hidden; }",
+    ".aw-concl.aw-muted { font-weight: 400; font-size: 12px; }",
+    ".aw-details { border: 1px solid #ece7de; border-radius: 8px; background: #fff; margin-bottom: 9px; }",
+    ".aw-details > summary { cursor: pointer; padding: 8px 10px; font-size: 11px; color: #6d6558; font-weight: 700; letter-spacing: .4px; list-style: none; }",
+    ".aw-details > summary::-webkit-details-marker { display: none; }",
+    ".aw-details > summary::before { content: '\\25B8  '; }",
+    ".aw-details[open] > summary::before { content: '\\25BE  '; }",
+    ".aw-detail-body { padding: 0 10px 10px; }",
+    ".aw-detail-body .aw-sec { border: 0; padding: 0 0 8px; margin-bottom: 8px; border-bottom: 1px dashed #ece7de; }",
+    ".aw-detail-body .aw-sec:last-child { border-bottom: 0; margin-bottom: 0; padding-bottom: 0; }",
+    ".aw-rec { border-top: 1px dashed #ece7de; padding-top: 6px; margin-top: 6px; }",
+    ".aw-rec a { display: block; color: #2b5dd7; text-decoration: none; font-weight: 700; font-size: 12px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }",
+    ".aw-rec a:hover { text-decoration: underline; }",
+    ".aw-rec-src { font-size: 10px; color: #6d6558; margin-top: 1px; }",
+    ".aw-rec-why { font-size: 11px; margin-top: 1px; }",
+    ".aw-footer { border-top: 1px solid #ece7de; background: #f7f3ec; color: #857c6c; font-size: 10px; padding: 6px 14px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }",
+  ].join("\n");
+  shadow.appendChild(styleEl2);
+
   const wrap = document.createElement("div");
   wrap.className = "aw-wrap";
   shadow.appendChild(wrap);
@@ -44,6 +65,7 @@
     '<div class="aw-chips" data-role="chips"></div>' +
     "</div>" +
     '<div class="aw-body" data-role="body"></div>' +
+    '<div class="aw-footer" data-role="footer"></div>' +
     "</aside>";
 
   for (const el of wrap.querySelectorAll("[data-role]")) nodes[el.dataset.role] = el;
@@ -75,6 +97,36 @@
   const fixed = (x, n = 2) => (typeof x === "number" && isFinite(x) ? x.toFixed(n) : "—");
   const count = (x) => (typeof x === "number" && isFinite(x) ? String(x) : "—");
   const label = (t) => TOPIC_LABELS[t] || t || "未知";
+  const trunc = (s, n) => {
+    const t = String(s == null ? "" : s).replace(/\s+/g, " ").trim();
+    return t.length > n ? t.slice(0, n) + "…" : t;
+  };
+  // 所有外链一律显示视频标题，标题缺失才回退到 URL（用户反馈：裸链接不知道是什么）。
+  function link(url, title) {
+    if (!url) return null;
+    const a = h("a", null, trunc(title || url, 26));
+    a.href = url;
+    a.target = "_blank";
+    a.rel = "noreferrer noopener";
+    a.title = title ? String(title) : String(url);
+    return a;
+  }
+  function titleMap(p) {
+    const map = new Map();
+    for (const alert of (p && p.alerts) || []) {
+      for (const ev of alert.evidence || []) {
+        if (ev && ev.content_id && ev.url) map.set(ev.content_id, { url: ev.url, title: ev.title });
+      }
+    }
+    return map;
+  }
+  const CONTEXT_LABELS = { home: "首页推荐", search: "搜索结果", video_related: "相关推荐" };
+  function firstSentence(text) {
+    const s = String(text || "").trim();
+    if (!s) return "";
+    const m = s.split(/[。！？!?；;]/)[0];
+    return m ? trunc(m, 42) : "";
+  }
   const localTime = (ms) => {
     if (!ms) return "—";
     const d = new Date(ms);
@@ -132,7 +184,6 @@
     const mode = h("span", "aw-chip", "data_mode " + p.data_mode);
     mode.dataset.mode = p.data_mode || "empty";
     nodes.chips.appendChild(mode);
-    nodes.chips.appendChild(h("span", "aw-chip", "样本 " + count(p.window && p.window.exposure_count) + " 次曝光"));
     nodes.chips.appendChild(h("span", "aw-chip", "窗口 " + count(p.window && p.window.days) + "天 " + localTime(p.window && p.window.start) + "→" + localTime(p.window && p.window.end)));
     if (st && st.paused) {
       const c = h("span", "aw-chip", "采集已暂停");
@@ -175,13 +226,10 @@
     const sec = section("我的目标");
     const goal = p && p.goal;
     if (goal && goal.present) {
-      const topics = (goal.topics || []).map((t) => label(t.t) + " " + fixed(t.w)).join("、");
-      sec.appendChild(kv([
-        ["目标", goal.text],
-        ["意图模式", (INTENT_MODES.find((m) => m[0] === goal.intent_mode) || [goal.intent_mode, goal.intent_mode])[1]],
-        ["目标主题", topics || "—"],
-        ["来源", goal.source],
-      ]));
+      const topics = (goal.topics || []).map((t) => label(t.t)).slice(0, 3).join("、");
+      const modeName = (INTENT_MODES.find((m) => m[0] === goal.intent_mode) || [goal.intent_mode, goal.intent_mode])[1];
+      sec.appendChild(h("div", null, goal.text));
+      sec.appendChild(h("div", "aw-muted", "意图：" + modeName + (topics ? " · 主题：" + topics : "")));
     } else {
       sec.appendChild(h("div", "aw-muted", "还没有设置目标。没有目标就无法做「目标 vs 曝光」的对照。"));
     }
@@ -240,7 +288,7 @@
       fill.style.width = Math.max(1, Math.round(((r[key] || 0) / max) * 100)) + "%";
       track.appendChild(fill);
       row.appendChild(track);
-      row.appendChild(h("span", "aw-bar-val", pct(r[key]) + (r.n != null ? " ·" + r.n : "")));
+      row.appendChild(h("span", "aw-bar-val", pct(r[key])));
       box.appendChild(row);
     }
     return box;
@@ -248,24 +296,19 @@
 
   function renderExposure(body) {
     const p = ui.profile;
-    const sec = section("曝光画像（平台给了我什么）");
+    const sec = section("主题分布");
     const e = p && p.exposure;
     if (!p || !e || !e.available) {
-      sec.appendChild(h("div", "aw-muted", "样本不足，暂不展示曝光分布。"));
+      const why = (p && p.notes && p.notes[0]) || "样本还不够看分布";
+      sec.appendChild(h("div", "aw-muted", why));
       body.appendChild(sec);
       return;
     }
-    sec.appendChild(h("div", "aw-muted", "主题分布（权重和 = 1）"));
-    sec.appendChild(bars(e.topics || [], "w"));
-    const src = e.top_source;
-    sec.appendChild(kv([
-      ["归一化熵", fixed(e.entropy) + "（越接近 1 越分散）"],
-      ["重复曝光率", pct(e.repeat_rate)],
-      ["单一来源占比", src ? (src.name || src.id || "未知") + " " + pct(src.share) + "（" + count(src.n) + " 次）" : "—"],
-      ["内容数 / 来源数", count(e.unique_items) + " / " + count(e.source_count)],
-    ]));
+    const rows = (e.topics || []).slice(0, 6);
+    sec.appendChild(bars(rows, "w"));
     body.appendChild(sec);
   }
+
 
   // ---- 对照 ----
   function diffRows(cmp, leftKey, leftName, rightName) {
@@ -316,16 +359,6 @@
   }
 
   // ---- 提醒 + 建议 ----
-  function evidenceMap(p) {
-    const map = new Map();
-    for (const alert of (p && p.alerts) || []) {
-      for (const ev of alert.evidence || []) {
-        if (ev && ev.content_id && ev.url) map.set(ev.content_id, ev.url);
-      }
-    }
-    return map;
-  }
-
   function renderAlerts(body) {
     const p = ui.profile;
     const sec = section("提醒 · 建议");
@@ -352,10 +385,7 @@
           const list = h("div", "aw-ev");
           for (const ev of evs.slice(0, 5)) {
             if (ev && ev.url) {
-              const a = h("a", null, ev.title || ev.url);
-              a.href = ev.url;
-              a.target = "_blank";
-              a.rel = "noreferrer noopener";
+              const a = link(ev.url, ev.title);
               a.title = "回到原视频：" + (ev.title || ev.url);
               list.appendChild(a);
             } else if (ev && ev.title) {
@@ -378,32 +408,7 @@
       sec.appendChild(ul);
     }
     const ai = p && p.ai;
-    if (ai && (ai.narrative || (ai.suggestions || []).length)) {
-      const map = evidenceMap(p);
-      if (ai.narrative) sec.appendChild(h("div", null, ai.narrative));
-      for (const sug of (ai.suggestions || []).slice(0, 3)) {
-        const item = h("div", "aw-sug-item");
-        item.appendChild(h("div", "aw-sug-title", sug.title || "建议"));
-        if (sug.why) item.appendChild(h("div", "aw-muted", sug.why));
-        if (sug.action) item.appendChild(h("div", "aw-foot", "动作：" + sug.action));
-        const links = h("div", "aw-ev");
-        for (const id of sug.evidence_ids || []) {
-          const url = map.get(id);
-          if (url) {
-            const a = h("a", null, url);
-            a.href = url;
-            a.target = "_blank";
-            a.rel = "noreferrer noopener";
-            links.appendChild(a);
-          } else {
-            links.appendChild(h("span", "aw-muted", id));
-          }
-        }
-        if (links.childNodes.length) item.appendChild(links);
-        sec.appendChild(item);
-      }
-      sec.appendChild(h("div", "aw-foot", "AI " + (ai.model || "—") + (ai.degraded ? "（降级）" : "") + (ai.cached ? "（缓存命中）" : "")));
-    }
+    if (ai) sec.appendChild(h("div", "aw-foot", "AI " + (ai.model || "—") + (ai.degraded ? "（降级：关键词兜底）" : "") + (ai.cached ? "（缓存命中）" : "")));
     body.appendChild(sec);
   }
 
@@ -464,15 +469,150 @@
     body.appendChild(sec);
   }
 
+  // ---- 首屏 1：结论（提醒标题合并 + 叙述首句，最多两行）----
+  function renderConclusion(body) {
+    const p = ui.profile;
+    const sec = section("结论");
+    if (!p) {
+      sec.appendChild(h("div", "aw-muted", ui.online === false ? "本地服务未启动。" : "正在取画像…"));
+      body.appendChild(sec);
+      return;
+    }
+    const titles = [];
+    for (const a of p.alerts || []) {
+      const t = a.title || a.rule_id;
+      if (t && titles.indexOf(t) < 0) titles.push(t);
+    }
+    sec.appendChild(h("div", "aw-concl", titles.length ? titles.slice(0, 2).join("；") : "暂时没有集中的信号"));
+    const sent = firstSentence(p.ai && p.ai.narrative);
+    if (sent) sec.appendChild(h("div", "aw-concl aw-muted", sent));
+    body.appendChild(sec);
+  }
+
+  // ---- 首屏 3：建议（最多 3 条，链接显示视频标题）----
+  function renderSuggestions(body) {
+    const p = ui.profile;
+    const sec = section("建议");
+    const list = (p && p.ai && p.ai.suggestions) || [];
+    if (!list.length) {
+      sec.appendChild(h("div", "aw-muted", ui.online === false ? "服务未启动，暂时没有建议。" : "暂时没有建议。"));
+      body.appendChild(sec);
+      return;
+    }
+    const map = titleMap(p);
+    for (const sug of list.slice(0, 3)) {
+      const item = h("div", "aw-sug-item");
+      item.appendChild(h("div", "aw-sug-title", trunc(sug.title || "建议", 20)));
+      if (sug.why) item.appendChild(h("div", "aw-muted", trunc(sug.why, 60)));
+      const links = h("div", "aw-ev");
+      for (const id of sug.evidence_ids || []) {
+        const hit = map.get(id);
+        if (hit && hit.url) links.appendChild(link(hit.url, hit.title));
+        else if (hit && hit.title) links.appendChild(h("span", "aw-muted", trunc(hit.title, 26)));
+      }
+      if (links.childNodes.length) item.appendChild(links);
+      sec.appendChild(item);
+    }
+    body.appendChild(sec);
+  }
+
+  // ---- 首屏 4：可以点开看看（recommendations 为空时整块不出现）----
+  function recWhy(rec) {
+    if (rec && rec.why) return trunc(rec.why, 40);
+    const b = (rec && rec.basis) || {};
+    const parts = [];
+    if (typeof b.goal_match === "number" && b.goal_match >= 0.6) parts.push("和你目标相关");
+    if (typeof b.fills_gap === "number" && b.fills_gap >= 0.6) parts.push("这个主题你刷得少");
+    if (typeof b.source_diversity === "number" && b.source_diversity >= 0.6) parts.push("换个来源");
+    if (typeof b.novelty === "number" && b.novelty >= 0.6) parts.push("以前没刷到");
+    return parts.length ? parts.slice(0, 2).join("；") : "你的推荐流里出现过，但你没点开";
+  }
+
+  function renderRecommendations(body) {
+    const recs = (ui.profile && ui.profile.recommendations) || [];
+    if (!recs.length) return;
+    const sec = section("可以点开看看");
+    for (const rec of recs.slice(0, 3)) {
+      const item = h("div", "aw-rec");
+      const a = link(rec.url, rec.title || rec.content_id);
+      if (a) item.appendChild(a);
+      else item.appendChild(h("div", "aw-sug-title", trunc(rec.title || "—", 26)));
+      const src = rec.source_name || "未知来源";
+      item.appendChild(h("div", "aw-rec-src", src + (rec.page_context ? " · " + (CONTEXT_LABELS[rec.page_context] || rec.page_context) : "")));
+      item.appendChild(h("div", "aw-rec-why aw-muted", recWhy(rec)));
+      sec.appendChild(item);
+    }
+    body.appendChild(sec);
+  }
+
+  // ---- 折叠区（首屏之后）：指标、阈值、不下结论的理由 ----
+  function renderExposureMetrics(body) {
+    const p = ui.profile;
+    const sec = section("曝光指标");
+    const e = p && p.exposure;
+    if (!e || !e.available) {
+      sec.appendChild(h("div", "aw-muted", "样本不足，指标不计算。"));
+      body.appendChild(sec);
+      return;
+    }
+    const src = e.top_source;
+    sec.appendChild(kv([
+      ["归一化熵", fixed(e.entropy) + "（越接近 1 越分散）"],
+      ["重复曝光率", pct(e.repeat_rate)],
+      ["单一来源占比", src ? (src.name || src.id || "未知") + " " + pct(src.share) + "（" + count(src.n) + " 次）" : "—"],
+      ["内容数 / 来源数", count(e.unique_items) + " / " + count(e.source_count)],
+    ]));
+    body.appendChild(sec);
+  }
+
+  function renderDetails(body) {
+    const d = document.createElement("details");
+    d.className = "aw-details";
+    const s = document.createElement("summary");
+    s.textContent = "展开细节（指标、阈值、不下结论的理由）";
+    d.appendChild(s);
+    const inner = h("div", "aw-detail-body");
+    d.appendChild(inner);
+    if (!ui.profile) {
+      inner.appendChild(h("div", "aw-muted", "尚未取到画像。"));
+    } else {
+      renderConditions(inner);
+      renderExposureMetrics(inner);
+      renderCompare(inner);
+      renderAlerts(inner);
+    }
+    body.appendChild(d);
+  }
+
+  // ---- 底部不可省略的一行：data_mode + 样本数 + 为什么不下结论 ----
+  function renderFooter() {
+    const el = nodes.footer;
+    if (!el) return;
+    const p = ui.profile;
+    if (!p) {
+      el.textContent = (ui.online === false ? "本地服务未启动" : "等待画像") + " · data_mode — · 样本 —";
+      return;
+    }
+    const w = p.window || {};
+    const bits = ["data_mode " + (p.data_mode || "—"), "样本 " + count(w.exposure_count) + " 次曝光"];
+    let reason = "";
+    if (p.behavior && p.behavior.available === false && p.behavior.reason) reason = p.behavior.reason;
+    else if (!(p.alerts || []).length && p.notes && p.notes[0]) reason = p.notes[0];
+    if (reason) bits.push(trunc(reason, 24));
+    el.textContent = bits.join(" · ");
+  }
+
   function render() {
     renderChips();
     nodes.body.textContent = "";
-    renderConditions(nodes.body);
-    renderGoal(nodes.body);
+    renderConclusion(nodes.body);
     renderExposure(nodes.body);
-    renderCompare(nodes.body);
-    renderAlerts(nodes.body);
+    renderSuggestions(nodes.body);
+    renderRecommendations(nodes.body);
+    renderGoal(nodes.body);
+    renderDetails(nodes.body);
     renderActions(nodes.body);
+    renderFooter();
     renderBall();
   }
 

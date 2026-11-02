@@ -28,7 +28,11 @@ test("14 日回放快照：曝光/行为画像可用，目标对照可算，至�
   const start = snapshot.window.start;
   const end = snapshot.window.end;
   const inWindow = parseReplay(readFileSync(fixturePath(), "utf8")).exposures.filter((e) => e.exposed_at >= start && e.exposed_at < end);
-  assert.equal(snapshot.window.exposure_count, inWindow.length);
+  // 契约 §10.1：曝光计数只算 home / video_related；搜索页拉取单独计入 search_pull_count
+  const pInWindow = inWindow.filter((e) => e.page_context === "home" || e.page_context === "video_related");
+  assert.equal(snapshot.window.exposure_count, pInWindow.length, "曝光计数应为 P 口径（不含搜索页）");
+  assert.equal(snapshot.window.search_pull_count, inWindow.length - pInWindow.length, "搜索页拉取必须单独计数");
+  assert.ok(snapshot.window.page_contexts.search > 0, "fixtures 里应该有搜索页曝光，否则这条口径没被覆盖");
 
   // 每条提醒都带来可回溯证据
   for (const alert of snapshot.alerts) {

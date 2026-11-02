@@ -28,6 +28,10 @@ import { distance, entropy, itemTopics, normalizeDist, repeatRate, round, toTopi
 
 const TOPIC_ORDER = new Map(TOPICS.map((t, i) => [t, i]));
 
+// 契约 §10.1：搜索页是用户主动拉取的内容，不进"平台推荐曝光" P，也不进熵/重复率/来源集中度的分母。
+// 它仍然入库、仍然计入 window.page_contexts.search 与 window.search_pull_count。
+const P_PAGE_CONTEXTS = ["home", "video_related"];
+
 function pct(x) {
   return round(x * 100, 1) + "%";
 }
@@ -331,9 +335,18 @@ export function buildSnapshot(input = {}) {
     .sort((a, b) => a.occurred_at - b.occurred_at || compareStr(String(a.action_id ?? ""), String(b.action_id ?? "")));
   const actionsInWindow = actions.filter((a) => a.occurred_at >= start && a.occurred_at < end);
 
-  const win = collectWindow(records, start, end);
+  const inWindow = records.filter((r) => r.at >= start && r.at < end);
+  const win = collectWindow(
+    inWindow.filter((r) => P_PAGE_CONTEXTS.includes(r.page_context)),
+    start,
+    end,
+  );
   const exp = summarizeExposure(win);
   const behavior = summarizeBehavior(actionsInWindow, itemsById);
+  const pageContextsAll = {};
+  for (const c of PAGE_CONTEXTS) pageContextsAll[c] = 0;
+  for (const r of inWindow) if (Object.prototype.hasOwnProperty.call(pageContextsAll, r.page_context)) pageContextsAll[r.page_context] += 1;
+  const searchPullCount = inWindow.reduce((acc, r) => acc + (r.page_context === "search" ? 1 : 0), 0);
 
   const exposureReady = exp.recs.length >= THRESHOLDS.minExposure && exp.knownRatio >= THRESHOLDS.minKnownTopicRatio;
   const behaviorReady = behavior.available;
@@ -353,7 +366,11 @@ export function buildSnapshot(input = {}) {
 
   let trend = null;
   if (wantPrev) {
-    const prevWin = collectWindow(records, prevStart, start);
+    const prevWin = collectWindow(
+      records.filter((r) => r.at >= prevStart && r.at < start && P_PAGE_CONTEXTS.includes(r.page_context)),
+      prevStart,
+      start,
+    );
     const prev = summarizeExposure(prevWin);
     const prevReady = prev.recs.length >= THRESHOLDS.minExposure && prev.knownRatio >= THRESHOLDS.minKnownTopicRatio;
     if (prevReady) {
@@ -366,7 +383,7 @@ export function buildSnapshot(input = {}) {
   }
 
   const sessionIds = new Set();
-  for (const r of exp.recs) if (r.session_id) sessionIds.add(r.session_id);
+  for (const r of inWindow) if (r.session_id) sessionIds.add(r.session_id);
   for (const a of actionsInWindow) if (a.session_id != null && String(a.session_id)) sessionIds.add(String(a.session_id));
 
   const window = {
@@ -379,7 +396,9 @@ export function buildSnapshot(input = {}) {
     session_count: sessionIds.size,
     unknown_topic_ratio: exp.recs.length > 0 ? round(exp.unknownCount / exp.recs.length) : 0,
     known_topic_ratio: round(exp.knownRatio),
-    page_contexts: exp.pageContexts,
+    // 曝光计数 = 计入 P 的条数（home + video_related）；搜索页拉取单独计数，避免"平台喂你"被自己搜的污染
+    search_pull_count: searchPullCount,
+    page_contexts: pageContextsAll,
   };
 
   const goalBlock = {
@@ -551,6 +570,12 @@ export function buildSnapshot(input = {}) {
         : "未启用前一窗口（prevWindow=false）：trend 为 null，narrowing 不评估。",
     );
   }
+  if (searchPullCount > 0) {
+    notes.push(
+      "有 " + searchPullCount + " 条曝光来自搜索页（你自己主动搜的），按契约 §10.1 不计入曝光画像 P、熵、重复率与来源集中度。",
+    );
+  }
+
   notes.push(
     "阈值为演示校准值（minExposure=" + T.minExposure + "、minKnownTopicRatio=" + T.minKnownTopicRatio +
       "、minBehavior=" + T.minBehavior + " 等），结论只覆盖已记录的样本，不构成心理或社会诊断。",
@@ -558,7 +583,7 @@ export function buildSnapshot(input = {}) {
 
   return {
     schema_version: SCHEMA_VERSION,
-    data_mode: dataModeOf(exp.recs),
+    data_mode: dataModeOf(inWindow),
     generated_at: generatedAt,
     window,
     goal: goalBlock,

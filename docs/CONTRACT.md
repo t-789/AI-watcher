@@ -182,3 +182,35 @@ fixtures/        replay-14d.jsonl（合成，可提交）
 tools/           check-extension.mjs  e2e/*.mjs（不进测试入口）
 ```
 `npm start` = `node src/server/main.js`（默认 3789）；`npm run replay` = 生成/加载合成日志到独立 db 后打印报告。
+
+## 10. 增补（v1.1）：推荐候选池 + 抽屉精简
+
+### 10.1 口径变更：搜索页结果不算「平台推荐曝光」
+`buildSnapshot` 的曝光画像 `P` 只统计 `page_context ∈ {home, video_related}`。`page_context="search"` 的 Exposure 仍入库、仍在 `window.page_contexts.search` 计数，但**不进 P、不进熵/重复率/来源集中度的分母**——搜索是你主动拉取的内容，算进「平台喂了你什么」会失真。新增字段 `window.search_pull_count`。
+
+### 10.2 推荐候选池（确定性排序，AI 只写理由）
+`src/core/recommend.js` 导出：
+```js
+export function rankRecommendations(input, k = 3): Recommendation[]
+// input = { items, exposures, actions, goal, now, windowDays }
+```
+候选 = 窗口内被记录过、但**没有被 open/watch 过**的内容（含搜索页结果）。排除 goal.exclusions 命中的条目。
+```js
+Recommendation = {
+  content_id, title, url, source_name, page_context, score,        // 0..1
+  basis: { goal_match, fills_gap, source_diversity, novelty },     // 各 0..1，供界面解释
+  why: null | string                                               // 由 AI 填，≤40 字；AI 不可用则为 null
+}
+```
+权重固定为 `0.40 goal_match + 0.25 fills_gap + 0.20 source_diversity + 0.15 novelty`；选出一条后，同主题与同来源的后续候选分别乘以 0.6 / 0.7 再继续贪心（`initial_plan` §6.6 的动态收益）。同分按 `content_id` 升序保证确定性。
+
+### 10.3 `GET /api/profile` 新增字段（只增不改）
+```js
+recommendations: Recommendation[]     // ≤3 条；候选不足时允许少于 3 条或为空
+```
+AI 只允许为**已定序**的候选写 `why`（一句话），不得增删条目、不得改顺序、不得编造 url。AI 不可用时全为 null，界面照样渲染（用 basis 生成模板句）。
+
+### 10.4 抽屉精简（按用户要求）
+首屏只保留：**结论**（alerts 标题 + narrative 首句合并）、**主题分布百分比**、**建议**（≤3 条，链接必须显示标题而非裸 URL）、**推荐区块**、**我的目标输入**。
+熵、重复率、来源集中度、D 值、阈值、样本数一律**不在首屏显示**（后端字段全部保留，可 `/api/export` 或折叠区查看）。
+底部保留一行**不可省略**的小字：`data_mode` + 样本数 + 「为什么不下结论」（证据不足时必须说清，这条不许砍）。

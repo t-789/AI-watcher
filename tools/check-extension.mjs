@@ -121,6 +121,42 @@ test("到 127.0.0.1 的请求只从 background 发出，且带超时", () => {
   return "background 独占 fetch + 3s 超时";
 });
 
+test("外链一律显示视频标题，标题缺失才回退 URL", () => {
+  const src = read("extension/content/overlay.js");
+  assert(/function link\(url, title\)/.test(src), "缺少统一 link() 渲染函数");
+  assert(/trunc\(title \|\| url, 26\)/.test(src), "link() 未见 title || url 回退 + 26 字截断");
+  const bare = [...src.matchAll(/h\("a", null, ([^)]*)\)/g)]
+    .map((m) => m[1].trim())
+    .filter((arg) => !/trunc\(title \|\| url/.test(arg));
+  assert(bare.length === 0, "仍有裸 URL 直接做链接文本：" + bare.join(" | "));
+  return "link() 统一渲染 + title 优先 + 26 字截断";
+});
+
+test("抽屉首屏结构：结论/分布/建议/推荐/目标 + 折叠区 + 底部固定行", () => {
+  const src = read("extension/content/overlay.js");
+  for (const fn of ["renderConclusion", "renderExposure", "renderSuggestions", "renderRecommendations", "renderGoal", "renderDetails", "renderFooter"]) {
+    assert(new RegExp("function " + fn + "\\(").test(src), "缺少 " + fn);
+  }
+  const order = ["renderConclusion(nodes.body)", "renderExposure(nodes.body)", "renderSuggestions(nodes.body)", "renderRecommendations(nodes.body)", "renderGoal(nodes.body)", "renderDetails(nodes.body)"];
+  const idxs = order.map((s) => src.indexOf(s));
+  assert(idxs.every((i) => i > 0), "render() 未按首屏顺序调用：" + JSON.stringify(idxs));
+  for (let i = 1; i < idxs.length; i += 1) assert(idxs[i] > idxs[i - 1], "首屏顺序不对：" + order[i] + " 应在 " + order[i - 1] + " 之后");
+  assert(/createElement\("details"\)/.test(src), "折叠区未使用原生 <details>");
+  for (const inner of ["renderConditions(inner)", "renderExposureMetrics(inner)", "renderCompare(inner)", "renderAlerts(inner)"]) {
+    assert(src.includes(inner), "折叠区未包含 " + inner);
+  }
+  assert(/data-role="footer"/.test(src), "缺少底部固定小字容器");
+  return "首屏 5 块 + <details> 折叠 + 固定底部行";
+});
+
+test("首屏只保留比例数字：条形不带条数、目标不带权重", () => {
+  const src = read("extension/content/overlay.js");
+  assert(!/pct\(r\[key\]\) \+ \(r\.n != null/.test(src), "条形仍在拼接条数");
+  assert(/aw-bar-val", pct\(r\[key\]\)/.test(src), "条形数值应只有百分比");
+  assert(!/label\(t\.t\) \+ " " \+ fixed\(t\.w\)/.test(src), "目标主题仍在显示权重数值");
+  return "条形=百分比，目标=标签";
+});
+
 const failures = [];
 let passed = 0;
 for (const { name, fn } of cases) {
