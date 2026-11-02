@@ -65,6 +65,26 @@ extension/content/overlay.js      ⑤ 呈现层：Shadow DOM 悬浮球 + 侧边�
 
 阈值与规划书的 50 / 80% 不同是有意的：demo 的一次浏览会话只产生几十条曝光，用规划书的门槛永远看不到任何一条提醒。它们在界面与本文里都标注为**演示校准值**，不是学术标准。
 
+## 5.1 用户目标 G 怎么来的
+
+自然语言 + 意图模式 → **AI 结构化**（`structureGoal`，只发目标原文/意图/10 个主题标签，不发浏览数据）→ 严格校验（主题必须在表内、权重 ∈(0,1]、≤4 个、归一化）→ 失败退回**关键词兜底** → 最后统一过一遍 `applyRelaxIntent` 确定性兜底。
+
+`applyRelaxIntent` 解决的是一个真实缺陷：用户写"在课余时间放松身心，顺便学点小知识、了解时事"，只靠关键词会把目标压成 `{news:1}`，"放松"被判为 0，于是 `D(G,P)` 把"你其实就在放松"算成偏差。现在命中 relax 意图或放松类词时，给 game/anime/film_tv 注入合计 **0.4**（组内 5:3:2），其余主题整体缩放到 0.6 并保留，再归一化。两种来源（AI / 关键词）之后都要过这一步，不依赖模型是否听话。
+
+## 5.2 "可以点开看看"的推荐是怎么排的
+
+候选池只来自**已经在库里的数据**，不发起任何新请求：窗口内出现过、但从未被 `open`/`watch` 的内容（含搜索页结果）。排序是纯函数 `rankRecommendations`：
+
+```
+score = 0.40·目标匹配(goal_topics ∩ 该视频主题)
+      + 0.25·补空白(该主题在曝光 P 里占比越低越高)
+      + 0.20·来源多样性(该 UP 主在 P 里占比越低越高)
+      + 0.15·新颖度(曝光次数越少越高)
+每选一条，同主题候选 ×0.6、同来源 ×0.7 后继续贪心；同分按 content_id 升序。
+```
+
+AI **只**为已定序的候选写一句 `why`（≤40 字），不得增删条目、不得改顺序、不得编造 URL；无 key 时 `why` 为 null，界面用 basis 生成模板句。
+
 ## 6. AI 使用边界
 
 - Key 只从 `process.env.DEEPSEEK_API_KEY` 读；启动日志只打端口/数据目录/`ai.mode`/模型名，任何日志、响应、文件都不含 key。
@@ -91,11 +111,12 @@ extension/content/overlay.js      ⑤ 呈现层：Shadow DOM 悬浮球 + 侧边�
 
 ## 9. 测试与验证证据
 
-- `node --test tests/core` → 73 pass（环形队列/堆/指标/六条规则正反例/确定性/回放）。
-- `node --test tests/server` → 68 pass（归一化与曝光去重、goal、profile、`CORE_UNAVAILABLE` 降级、无 key 降级、缓存命中、pause/export/reset、sqlite 重启不丢）。
-- `npm test` → 146 pass / 0 fail（core 73 + server 68 + ext 5）。
+- `node --test tests/core` → 103 pass（环形队列/堆/指标/六条规则正反例/目标解析/推荐排序/确定性/回放）。
+- `node --test tests/server` → 88 pass（归一化与曝光去重、goal、profile、`CORE_UNAVAILABLE` 降级、无 key 降级、缓存命中、pause/export/reset、sqlite 重启不丢）。
+- `npm test` → 196 pass / 0 fail（core 103 + server 88 + ext 5）。
 - `node tools/check-extension.mjs` → 11/11 通过（manifest、单一事实来源、顶层不碰 document、fetch 只在 background 且带超时）。
-- 真机验收 `node tools/e2e/acceptance.mjs` → **19/19 通过**：CDP 装载扩展（Chrome 156 已忽略 `--load-extension`）→ 真实 B 站 → 悬浮球渲染 / 曝光入库 / **真点击**后行为入库 / 抽屉六分区 / 目标结构化 / 快照可用 / 标注队列落定 / 叙述缓存命中 / 页面零未捕获错误 / 服务停机后悬浮球降级。截图与报告在 `ignore/temp/shots/`、`ignore/temp/e2e-report.json`。
+- 刷新策略验收 `node tools/e2e/refresh-check.mjs` → 11/12（唯一未过：手动刷新后焦点不回输入框，内容不丢；已知瑕疵）。
+- 真机验收 `node tools/e2e/acceptance.mjs` → **21/21 通过**：CDP 装载扩展（Chrome 156 已忽略 `--load-extension`）→ 真实 B 站 → 悬浮球渲染 / 曝光入库 / **真点击**后行为入库 / 抽屉六分区 / 目标结构化 / 快照可用 / 标注队列落定 / 叙述缓存命中 / 页面零未捕获错误 / 服务停机后悬浮球降级。截图与报告在 `ignore/temp/shots/`、`ignore/temp/e2e-report.json`。
 - 行为样本门槛的独立补证 `node tools/e2e/behavior-session.mjs`：真实会话连续点开 10 个视频 → `behavior.available=true, sample_n=10, D(U,P)=0.2427, exposures=357, actions=19`。这条存在的原因见下。
 
 ## 9.1 一个必须讲清的口径：U 需要 10 个样本

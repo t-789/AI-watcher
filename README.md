@@ -4,6 +4,8 @@
 >
 > 它不读视频内容、不拦截网络、不调平台内部接口、不做任何账号操作（不点赞、不关注、不自动播放）。
 
+它能做四件事：**看**你刷到的内容与主题分布、**比**平台给的（曝光 P）与你点的（行为 U）与你写的（目标 G）、**查**分布是否异常（集中/重复/单一来源/与目标差距），以及**推荐**你没点开但可能值得看的（确定性排序，见下）。
+
 这是课程项目的**技术路线验证 demo**：把"采集 → 归一化 → 确定性统计 → AI 标注 → 界面"这条链路真正跑通。完整产品规划见 `ignore/initial_plan.md`（不进版本控制），架构与移动端迁移见 `docs/ARCHITECTURE.md`、`docs/MOBILE-PATH.md`。
 
 ---
@@ -67,10 +69,11 @@ npm run demo     # 把 fixtures/replay-14d.jsonl（14 天合成日志，680 条�
 | `npm run demo` | 灌合成回放数据到 `data-demo/` 并起服务（断网/无 key 可演示） |
 | `npm run replay` | 只跑回放：打印窗口、主题分布、熵、重复率、来源集中度、触发的提醒清单 |
 | `npm run chrome` | 用独立 profile 启动一个装好本扩展的 Chrome |
-| `npm test` | 全部单测（146 条：core 73 / server 68 / ext 5） |
+| `npm test` | 全部单测（196 条：core 103 / server 88 / ext 5） |
 | `npm run check` | 单测 + 扩展静态检查（manifest / 单一事实来源 / fetch 只在 background） |
 | `npm run accept` | 真机端到端验收：装扩展 → 真 B 站 → 悬浮球/抽屉/画像 → 停机降级（需 puppeteer-core：`mkdir -p ignore/temp/e2e-deps && cd ignore/temp/e2e-deps && npm i puppeteer-core`，或 `npm i -D puppeteer-core`） |
 | `node tools/e2e/behavior-session.mjs` | 行为门槛补证：连续点开 10 个视频，验证 `behavior.available` 与 `D(U,P)` 真的能算出来 |
+| `node tools/e2e/refresh-check.mjs` | 刷新策略验收：打字后等 25 秒输入不丢、数据没变不重绘、重绘保住展开态与滚动、手动刷新保草稿 |
 
 服务端参数：`--port`、`--data-dir`、`--replay`、`--seed`（配 `--replay`，灌进服务同款库）、`--append`、`--fixtures`。
 

@@ -2,8 +2,23 @@
 // 用法：bash -lc 'source ~/.zshrc; node tools/e2e/acceptance.mjs'
 import { spawn } from "node:child_process";
 import { createRequire } from "node:module";
-import { mkdirSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { setTimeout as sleep } from "node:timers/promises";
+
+// 验收需要真实 AI：优先用环境变量，其次从 ~/.zshrc 取（本机 DSH 进程里通常没有）。
+// AIWATCHER_NO_KEY=1 可强制 degraded，用来验降级路径。
+function resolveKey() {
+  if (process.env.AIWATCHER_NO_KEY === "1") return { key: "", from: "强制降级" };
+  if (process.env.DEEPSEEK_API_KEY) return { key: process.env.DEEPSEEK_API_KEY, from: "环境变量" };
+  try {
+    const rc = readFileSync(process.env.HOME + "/.zshrc", "utf8");
+    const m = rc.match(/export\s+DEEPSEEK_API_KEY\s*=\s*(.+)/);
+    if (m) return { key: m[1].trim().replace(/^["']|["']$/g, ""), from: "~/.zshrc" };
+  } catch {}
+  return { key: "", from: "未找到" };
+}
+const KEY = resolveKey();
+console.log("key 来源: " + KEY.from + (KEY.key ? " (len=" + KEY.key.length + ")" : ""));
 
 const ROOT = "/Users/liuzy/Desktop/AI-watcher";
 const require = createRequire(ROOT + "/ignore/temp/e2e-deps/");
@@ -59,7 +74,7 @@ const ballOf = (page) => page.evaluate(() => {
 let serverProc = null, c1 = null, c2 = null, srvLog = "";
 const startServer = async () => {
   const p = spawn(process.execPath, ["src/server/main.js", "--port", String(PORT), "--data-dir", DATA],
-    { cwd: ROOT, env: process.env, stdio: ["ignore", "pipe", "pipe"] });
+    { cwd: ROOT, env: { ...process.env, DEEPSEEK_API_KEY: KEY.key }, stdio: ["ignore", "pipe", "pipe"] });
   p.stdout.on("data", (d) => (srvLog += d)); p.stderr.on("data", (d) => (srvLog += d));
   for (let i = 0; i < 40; i++) { try { await api("/api/status"); return p; } catch { await sleep(250); } }
   return p;
@@ -109,16 +124,26 @@ try {
   await page.screenshot({ path: SHOTS + "/b2-video.png" });
 
   await page.evaluate(() => document.getElementById("ai-watcher-host")?.shadowRoot?.querySelector("[data-role=ball]")?.click());
-  await sleep(2500);
+  // 抽屉先渲染占位符，等 /api/profile 真回来（footer 出现 data_mode real）再断言，最多等 25s。
+  let drawer = "";
+  for (let i = 0; i < 25; i++) {
+    await sleep(1000);
+    drawer = await page.evaluate(() => document.getElementById("ai-watcher-host").shadowRoot.textContent.replace(/\s+/g, " "));
+    if (/data_mode\s*(real|synthetic|mixed|empty)/.test(drawer)) break;
+  }
   await page.screenshot({ path: SHOTS + "/b3-drawer.png" });
-  const drawer = await page.evaluate(() => document.getElementById("ai-watcher-host").shadowRoot.textContent.replace(/\s+/g, " "));
-  const sections = ["观察条件", "我的目标", "曝光画像", "行为 vs 曝光", "提醒", "操作"];
-  check("抽屉渲染六个分区", sections.every((k) => drawer.includes(k)), sections.filter((k) => !drawer.includes(k)).join(",") || "all present");
+  const first = ["结论", "主题分布", "建议", "我的目标"];
+  check("抽屉首屏四块齐备（精简版结构）", first.every((k) => drawer.includes(k)), first.filter((k) => !drawer.includes(k)).join(",") || "all present");
+  check("细节收进折叠区", /展开细节/.test(drawer) && /观察条件/.test(drawer), "含'展开细节'与'观察条件'");
+  check("底部固定行披露 data_mode 与样本", /data_mode\s*(real|synthetic|mixed|empty)/.test(drawer) && /样本/.test(drawer), drawer.slice(0, 60));
 
   const goal = await fetch(BASE + "/api/goal", { method: "POST", headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ goal_text: "这个月想搞懂大模型在自己电脑上怎么跑起来", intent_mode: "skill" }) }).then((r) => r.json());
   check("自然语言目标写入并结构化", (goal?.goal_topics?.length ?? 0) > 0, JSON.stringify(goal?.goal_topics ?? goal).slice(0, 110));
 
+  // 冻结入库后再取基线，否则采集器仍在上报、指纹必然变，等于在测另一件事。
+  await fetch(BASE + "/api/pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused: true }) });
+  await sleep(3000);
   const prof1 = await api("/api/profile?days=7");
   writeFileSync(ROOT + "/ignore/temp/e2e-profile.json", JSON.stringify(prof1, null, 2));
   check("GET /api/profile 返回真实快照", !!prof1?.window && prof1.data_mode === "real",
@@ -138,15 +163,16 @@ try {
   let settled = null;
   for (let i = 0; i < 40; i++) { settled = (await api("/api/status")).ai; if (settled.pending === 0) break; await sleep(1500); }
   check("标注队列已落定（等待上限 60s）", settled?.pending === 0, "pending=" + settled?.pending + " labeled=" + settled?.labeled + " unlabeled=" + settled?.unlabeled);
-  // 页面上还在刷、采集器还在报，数据每秒都在变；冻结入库后再验缓存才有意义。
-  await fetch(BASE + "/api/pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused: true }) });
-  await sleep(3000);
+  // 抽屉开着会每 20s 自己拉一次 profile；并发两次 profile 必有一次是"先到先算"。
+  // 关掉抽屉再验缓存，才是能重复的验证。
+  await page.evaluate(() => document.getElementById("ai-watcher-host").shadowRoot.querySelector("[data-role=ball]").click());
+  await sleep(1500);
   const before = (await api("/api/status")).ai;
   const prof2 = await api("/api/profile?days=7");
   const after = (await api("/api/status")).ai;
   await fetch(BASE + "/api/pause", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ paused: false }) });
   check("叙述有缓存：重复请求不再烧 token", after.requests === before.requests && (prof2?.ai?.narrative_cached === true || after.cache_hits > before.cache_hits),
-    "requests " + before.requests + "→" + after.requests + " narrative_cached=" + prof2?.ai?.narrative_cached);
+    "requests " + before.requests + "→" + after.requests + " narrative_cached=" + prof2?.ai?.narrative_cached + " hits " + before.cache_hits + "→" + after.cache_hits);
   check("标注进度可观测（pending 含在飞）", typeof after.pending === "number", "ai=" + JSON.stringify({ pending: after.pending, inflight: after.inflight, labeled: after.labeled, unlabeled: after.unlabeled }));
   check("页面无扩展引起的未捕获错误", errors.length === 0, errors.slice(0, 2).join(" | "));
 
