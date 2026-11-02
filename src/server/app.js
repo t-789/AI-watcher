@@ -44,6 +44,8 @@ export function createApp(deps = {}) {
   const analyze = typeof deps.analyze === "function" ? deps.analyze : null;
   const clock = deps.clock ?? { now: () => Date.now() };
   const parseGoal = typeof deps.parseGoal === "function" ? deps.parseGoal : null;
+  // 目标结构化优先走模型（契约：自然语言目标 + 意图模式 → 主题权重），失败/无 key 再退回关键词兜底。
+  const structureGoal = typeof deps.structureGoal === "function" ? deps.structureGoal : null;
   const port = deps.port ?? CONTRACT_VALUES.PORT;
   const version = deps.version ?? CONTRACT_VALUES.SCHEMA_VERSION;
   const profileId = deps.profileId ?? CONTRACT_VALUES.PROFILE_ID;
@@ -279,11 +281,27 @@ export function createApp(deps = {}) {
     const intentMode = INTENT_MODES.has(body.intent_mode) ? body.intent_mode : "relax";
     const previous = store.getGoal();
     let goalTopics = normaliseTopics(body.goal_topics, { maxWeight: Infinity }) ?? [];
-    if (parseGoal) {
+    let goalSource = goalTopics.length ? "user" : "fallback";
+    if (structureGoal) {
+      try {
+        const structured = await structureGoal({ text: goalText, intentMode });
+        const fromAI = normaliseTopics(structured?.topics, { maxWeight: Infinity });
+        if (fromAI && fromAI.length) {
+          goalTopics = fromAI;
+          goalSource = "ai";
+        }
+      } catch {
+        // 模型调用失败不影响保存：下面还会走关键词兜底
+      }
+    }
+    if (goalSource !== "ai" && parseGoal) {
       try {
         const parsed = parseGoal(goalText, intentMode);
         const fromParser = normaliseTopics(parsed?.goal_topics, { maxWeight: Infinity });
-        if (fromParser && fromParser.length) goalTopics = fromParser;
+        if (fromParser && fromParser.length) {
+          goalTopics = fromParser;
+          goalSource = "keyword";
+        }
       } catch {
         // 关键词兜底失败就保留空主题表：宁可"未知"，也不编造目标主题
       }
@@ -300,7 +318,8 @@ export function createApp(deps = {}) {
       exploration_level: clampUnit(body.exploration_level, 0.5),
       updated_at: clock.now(),
       version: (previous?.version ?? 0) + 1,
-      source: "user",
+      // source 只增不改：ai / keyword 表示主题表怎么来的，user 表示客户端直接给了主题表，fallback 表示没解析出来。
+      source: goalSource,
     };
     store.setGoal(goal);
     sendJSON(res, 200, goal);

@@ -13,6 +13,7 @@ async function harness(options = {}) {
     analyze: (input) => fakeSnapshot(input),
     clock: { now: () => NOW },
     parseGoal: options.parseGoal ?? null,
+    structureGoal: options.structureGoal ?? null,
   });
   const server = await startServer(app);
   return { ...server, store };
@@ -28,7 +29,8 @@ test("POST /api/goal 写入 GoalProfile 并可读回（version 递增）", async
   assert.equal(first.json.goal_text, "想学 AI 基础");
   assert.equal(first.json.intent_mode, "skill");
   assert.equal(first.json.version, 1);
-  assert.equal(first.json.source, "user");
+  // source 语义变更为"主题表从哪来"：客户端没给主题、也没有解析器 → fallback（原来一律写 user）。
+  assert.equal(first.json.source, "fallback");
   assert.equal(first.json.updated_at, NOW);
   assert.deepEqual(first.json.exclusions, []);
   assert.deepEqual(first.json.goal_topics, []);
@@ -83,4 +85,47 @@ test("goal 进入 /api/profile 的 analyze 输入", async (t) => {
   await callHttp(server.url, "GET", "/api/profile");
   assert.equal(seen.at(-1).goal.goal_text, "学 AI");
   assert.equal(seen.at(-1).goal.intent_mode, "skill");
+});
+
+test("目标结构化优先走模型：source=ai 且主题按权重降序归一", async (t) => {
+  const app = await harness({
+    structureGoal: async () => ({ topics: [{ t: "game", w: 0.2 }, { t: "news", w: 0.2 }, { t: "bogus", w: 0.9 }], model: "deepseek-chat", degraded: false }),
+    parseGoal: () => ({ goal_topics: [{ t: "study", w: 1 }] }),
+  });
+  t.after(() => app.close());
+
+  const response = await callHttp(app.url, "POST", "/api/goal", { goal_text: "放松身心，了解一下时事", intent_mode: "relax" });
+  assert.equal(response.status, 200);
+  assert.equal(response.json.source, "ai", "模型给出了主题就不该被关键词覆盖");
+  assert.deepEqual(response.json.goal_topics.map((x) => x.t), ["game", "news"], "非法主题必须被丢弃");
+  const sum = response.json.goal_topics.reduce((acc, x) => acc + x.w, 0);
+  assert.ok(Math.abs(sum - 1) <= 1e-3, "权重和应为 1，实际 " + sum);
+});
+
+test("模型失败/返回空主题 → 退回关键词兜底：source=keyword，不 500", async (t) => {
+  const cases = [
+    { name: "抛错", structureGoal: async () => { throw new Error("boom"); } },
+    { name: "空主题", structureGoal: async () => ({ topics: [], model: "deepseek-chat", degraded: true }) },
+    { name: "全非法", structureGoal: async () => ({ topics: [{ t: "bogus", w: 1 }], model: "deepseek-chat", degraded: false }) },
+  ];
+  for (const item of cases) {
+    const app = await harness({ structureGoal: item.structureGoal, parseGoal: () => ({ goal_topics: [{ t: "study", w: 0.6 }, { t: "science", w: 0.4 }] }) });
+    t.after(() => app.close());
+    const response = await callHttp(app.url, "POST", "/api/goal", { goal_text: "备考", intent_mode: "exam" });
+    assert.equal(response.status, 200, item.name + " 不应 500");
+    assert.equal(response.json.source, "keyword", item.name + " 应退回关键词兜底");
+    assert.deepEqual(response.json.goal_topics.map((x) => x.t), ["study", "science"]);
+  }
+});
+
+test("整数 0 与 negative 权重被丢弃；body 显式 goal_topics 且无解析来源时 source=user", async (t) => {
+  const app = await harness();
+  t.after(() => app.close());
+  const response = await callHttp(app.url, "POST", "/api/goal", {
+    goal_text: "看数码",
+    intent_mode: "skill",
+    goal_topics: [{ t: "tech", w: 1 }, { t: "game", w: 0 }],
+  });
+  assert.equal(response.json.source, "user");
+  assert.deepEqual(response.json.goal_topics.map((x) => x.t), ["tech"]);
 });

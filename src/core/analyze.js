@@ -4,9 +4,12 @@ import {
   BEHAVIOR_WEIGHTS,
   COUNTER_PREFIX,
   DAY_MS,
+  GOAL_KEYWORD_EXTRA,
+  GOAL_KEYWORD_HIT_CAP,
   GOAL_KEYWORD_WEIGHT,
   GOAL_KEYWORDS,
   GOAL_MIN_TOPIC_WEIGHT,
+  GOAL_TOPIC_LIMIT,
   INTENT_EXPLORATION,
   INTENT_MODES,
   INTENT_PRIOR_WEIGHT,
@@ -600,6 +603,7 @@ export function buildSnapshot(input = {}) {
 // ---------- 目标文本兜底解析（无 AI） ----------
 
 const EXCLUSION_SPLIT = /[\s，。；、,.;!?！？]+/;
+const GOAL_CLAUSE_SPLIT = EXCLUSION_SPLIT;
 const EXCLUSION_MARK = /(?:不想看|不想|不要|不看|排除|讨厌|少推)(.+)/;
 
 function extractExclusions(text) {
@@ -622,41 +626,60 @@ function extractExclusions(text) {
  */
 export function parseGoalText(text, intentMode, options = {}) {
   const trimmed = typeof text === "string" ? text.trim() : "";
-  const lower = trimmed.toLowerCase();
   const intent = INTENT_MODES.includes(intentMode) ? intentMode : "relax";
   const priors = INTENT_PRIORS[intent] ?? {};
 
-  const scores = new Map();
-  let hits = 0;
-  for (const t of TOPICS) {
-    const words = GOAL_KEYWORDS[t] ?? [];
-    let n = 0;
-    for (const w of words) if (w && lower.includes(w)) n += 1;
-    if (n > 0) {
-      hits += n;
-      scores.set(t, n * GOAL_KEYWORD_WEIGHT + (priors[t] ?? 0) * INTENT_PRIOR_WEIGHT);
+  // 按分句打分再等权合并：多意图句子里每个分句各贡献一份分布，
+  // 最后出现的那个关键词不再能独吞整句话（旧实现按全句命中计数就会塌陷）。
+  const clauseDists = [];
+  let keywordHits = 0;
+  for (const clause of trimmed.split(GOAL_CLAUSE_SPLIT)) {
+    const seg = clause.trim().toLowerCase();
+    if (!seg || EXCLUSION_MARK.test(seg)) continue; // 排除项不参与目标主题
+    const local = new Map();
+    for (const t of TOPICS) {
+      let n = 0;
+      for (const w of GOAL_KEYWORDS[t] ?? []) if (w && seg.includes(w)) n += 1;
+      if (n === 0) continue;
+      keywordHits += n;
+      const extra = Math.min(n - 1, GOAL_KEYWORD_HIT_CAP - 1) * GOAL_KEYWORD_EXTRA;
+      local.set(t, GOAL_KEYWORD_WEIGHT + extra);
     }
-  }
-  if (hits === 0) {
-    // 没有任何关键词命中时，用 intent_mode 先验兜底，并如实标注 source=fallback。
-    for (const [t, w] of Object.entries(priors)) scores.set(t, Number(w));
-  } else {
-    for (const [t, w] of Object.entries(priors)) if (!scores.has(t)) scores.set(t, Number(w) * INTENT_PRIOR_WEIGHT);
+    if (local.size === 0) {
+      // 分句没有关键词命中时用 intent_mode 先验（先验在这里是"整份分布"，不是陪衬）。
+      for (const [t, w] of Object.entries(priors)) {
+        if (TOPICS.includes(t) && Number(w) > 0) local.set(t, Number(w) * INTENT_PRIOR_WEIGHT);
+      }
+    }
+    const sum = [...local.values()].reduce((acc, v) => acc + v, 0);
+    if (!(sum > 0)) continue;
+    clauseDists.push([...local.entries()].map(([t, s]) => [t, s / sum]));
   }
 
-  let total = 0;
-  for (const [t, s] of scores) if (TOPICS.includes(t) && s > 0) total += s;
-  const goalTopics = [];
-  if (total > 0) {
-    const kept = [];
-    for (const [t, s] of scores) {
-      if (!TOPICS.includes(t) || !(s > 0)) continue;
-      if (s / total < GOAL_MIN_TOPIC_WEIGHT) continue;
-      kept.push([t, s]);
+  const scores = new Map();
+  if (clauseDists.length === 0) {
+    // 整句没有任何可用信号：退回意图先验，source 仍标注 fallback（不冒充"读懂了目标"）。
+    for (const [t, w] of Object.entries(priors)) {
+      if (TOPICS.includes(t) && Number(w) > 0) scores.set(t, Number(w));
     }
+  } else {
+    for (const dist of clauseDists) {
+      for (const [t, v] of dist) scores.set(t, (scores.get(t) ?? 0) + v / clauseDists.length);
+    }
+  }
+
+  const total = [...scores.values()].reduce((acc, v) => acc + (v > 0 ? v : 0), 0);
+  let goalTopics = [];
+  if (total > 0) {
+    // GOAL_TOPIC_LIMIT 只收窄"用户真的说了主题"的结果；纯先验兜底保留 intent 的完整预设分布，
+    // 收窄它没有信息收益，还会让同类目标的默认值随常量漂移。
+    const limit = keywordHits > 0 ? GOAL_TOPIC_LIMIT : TOPICS.length;
+    const kept = [...scores.entries()]
+      .filter(([t, s]) => TOPICS.includes(t) && s > 0 && s >= GOAL_MIN_TOPIC_WEIGHT)
+      .sort((a, b) => b[1] - a[1] || (TOPIC_ORDER.get(a[0]) ?? 0) - (TOPIC_ORDER.get(b[0]) ?? 0))
+      .slice(0, limit);
     const keptTotal = kept.reduce((acc, [, s]) => acc + s, 0);
-    for (const [t, s] of kept) goalTopics.push({ t, w: round(s / keptTotal) });
-    goalTopics.sort((a, b) => b.w - a.w || (TOPIC_ORDER.get(a.t) ?? 0) - (TOPIC_ORDER.get(b.t) ?? 0));
+    goalTopics = kept.map(([t, s]) => ({ t, w: round(s / keptTotal) }));
   }
 
   return {

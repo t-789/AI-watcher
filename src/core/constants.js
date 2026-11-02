@@ -62,7 +62,7 @@ export const WATCH_RATIO_FALLBACK = 0.5;
 
 export const GOAL_KEYWORDS = {
   tech: ["ai", "人工智能", "大模型", "芯片", "数码", "显卡", "编程", "代码", "软件", "算法", "工具", "手机", "相机"],
-  science: ["科学", "科普", "物理", "化学", "生物", "天文", "实验", "数学", "统计", "论文"],
+  science: ["科学", "科普", "物理", "化学", "生物", "天文", "实验", "数学", "统计", "论文", "知识", "冷知识"],
   game: ["游戏", "手游", "端游", "攻略", "电竞", "steam", "主机", "开黑", "抽卡"],
   anime: ["动漫", "番剧", "二次元", "动画", "漫画", "cos", "声优"],
   film_tv: ["电影", "剧集", "电视剧", "综艺", "纪录片", "影视", "追剧", "影评"],
@@ -73,9 +73,17 @@ export const GOAL_KEYWORDS = {
   news: ["新闻", "时事", "财经", "社会", "股票", "政策", "国际", "热点", "事件"],
 };
 
+// 目标解析按"分句等权"合并：一句话里出现多个意图时，每个分句贡献一份分布，
+// 不允许最后出现的那个关键词把整句吃掉（旧实现按全句命中计数，会让"放松身心+了解时事"塌陷成单一主题）。
 export const GOAL_KEYWORD_WEIGHT = 1;
-export const INTENT_PRIOR_WEIGHT = 0.15;
+// 同一分句里同一主题命中多个近义词的额外加分（封顶见 GOAL_KEYWORD_HIT_CAP），避免"知识/小知识"线性放大。
+export const GOAL_KEYWORD_EXTRA = 0.15;
+export const GOAL_KEYWORD_HIT_CAP = 2;
+// 意图先验在分句内的权重倍数：分句没有关键词命中时直接用先验，因此不再是被 1.0 关键词压掉的陪衬。
+export const INTENT_PRIOR_WEIGHT = 1;
 export const GOAL_MIN_TOPIC_WEIGHT = 0.05;
+// 目标主题上限：避免画像里塞进一堆 5% 的碎片。
+export const GOAL_TOPIC_LIMIT = 4;
 
 // 环形队列表（RingWindow）的计数键前缀：同一张计数表同时维护主题权重、主题出现次数、来源次数。
 export const COUNTER_PREFIX = { topicWeight: "tw:", topicCount: "tc:", source: "src:" };

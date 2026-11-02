@@ -105,6 +105,7 @@ async function runServer({ dataDir: dir, port: listenPort }) {
     analyze,
     clock,
     parseGoal: typeof core?.parseGoalText === "function" ? core.parseGoalText : null,
+    structureGoal: typeof ai.structureGoal === "function" ? (input) => ai.structureGoal(input) : null,
     port: listenPort,
     version: constants.SCHEMA_VERSION,
     profileId: constants.PROFILE_ID,

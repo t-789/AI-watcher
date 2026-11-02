@@ -20,6 +20,10 @@ try {
 }
 
 export const TOPICS = Object.freeze(Array.isArray(coreConstants?.TOPICS) ? [...coreConstants.TOPICS] : [...CONTRACT.TOPICS]);
+// 主题中文名只用于发给模型当提示，不参与任何判断；缺失时退回主题 id。
+const TOPIC_LABELS = Object.freeze({ ...(coreConstants?.TOPIC_LABELS ?? {}) });
+const labelOf = (t) => TOPIC_LABELS[t] ?? t;
+const GOAL_TOPIC_LIMIT = Number.isInteger(coreConstants?.GOAL_TOPIC_LIMIT) ? coreConstants.GOAL_TOPIC_LIMIT : 4;
 export const CONTRACT_VALUES = Object.freeze({ ...CONTRACT, TOPICS });
 
 const BASE_URL = "https://api.deepseek.com/chat/completions";
@@ -64,6 +68,16 @@ const NARRATIVE_SYSTEM_PROMPT = [
   '输出：{"narrative":"不超过200字","suggestions":[{"title":"不超过20字","why":"不超过60字","action":"search|watch_other_source|platform_feedback|keep","evidence_ids":["content_id"]}]}',
   "建议最多 3 条。evidence_ids 只能从输入的 evidence 里选，禁止编造链接、标题或引文。没有证据就不要给建议。",
   "只描述统计现象，不做心理诊断，不夸大平台因果。",
+].join("\n");
+
+// 目标结构化：把用户一句话拆成主题权重。允许（并要求）多主题——单主题塌陷是本模块存在的理由。
+const GOAL_SYSTEM_PROMPT = [
+  "你是目标结构化模块，只输出一个 JSON 对象，不要解释、不要 markdown 代码块。",
+  '输入：{"goal_text":"用户原话","intent_mode":"relax|learn_event|skill|exam|cure","topics":[{"t":主题 id,"label":中文名}]}',
+  '输出：{"topics":[{"t":主题 id,"w":权重}]}',
+  "t 只能取输入 topics 里的主题 id；w ∈ (0,1] 且和为 1；最多 4 个主题，按权重降序。",
+  "一句话里有多重意图时必须拆成多个主题。例如「放松身心、学点小知识、了解时事」应同时包含放松类、知识类和时事类，不能只留时事。",
+  "intent_mode 是用户自己选的语气，用来补文本没明说的部分；文本明说的意图优先。",
 ].join("\n");
 
 export function createAI(options = {}) {
@@ -176,6 +190,28 @@ export function createAI(options = {}) {
     return list.map((item) => settled.get(item.content_id) ?? settle(item, keywordLabel(item), "keywords", false));
   }
 
+  async function structureGoal(input) {
+    const text = clipText(input?.text, 200) ?? "";
+    const intentMode = typeof input?.intentMode === "string" ? input.intentMode : "relax";
+    if (!text) return { topics: null, model, degraded: true };
+    if (mode === "degraded") return { topics: null, model, degraded: true };
+    const payload = {
+      goal_text: text,
+      intent_mode: intentMode,
+      topics: TOPICS.map((t) => ({ t, label: labelOf(t) })),
+    };
+    let parsed = null;
+    try {
+      parsed = await callChat(GOAL_SYSTEM_PROMPT, JSON.stringify(payload));
+    } catch {
+      parsed = null;
+    }
+    if (!parsed) return { topics: null, model, degraded: true };
+    const topics = validateGoalTopics(parsed);
+    if (!topics) return { topics: null, model, degraded: true };
+    return { topics, model, degraded: false };
+  }
+
   async function narrative(input) {
     const evidence = (Array.isArray(input?.evidence) ? input.evidence : []).filter((entry) => entry && typeof entry.content_id === "string");
     const allowed = new Set(evidence.map((entry) => entry.content_id));
@@ -208,6 +244,7 @@ export function createAI(options = {}) {
     model,
     label,
     narrative,
+    structureGoal,
     stats: () => ({ ...counters }),
     cacheSize: () => cache.size,
   };
@@ -289,6 +326,31 @@ export function keywordLabel(item) {
   const summary = clipText(item?.title, 40);
   if (summary) out.summary = summary;
   return out;
+}
+
+// 目标结构化结果校验：主题必须在表内、权重 (0,1]、最多 GOAL_TOPIC_LIMIT 个、归一化到 1。
+// 任何一条不合法就丢弃该条；全被丢弃时返回 null，由调用方退回关键词兜底（绝不编造目标主题）。
+function validateGoalTopics(raw) {
+  const list = Array.isArray(raw?.topics) ? raw.topics : [];
+  const best = new Map();
+  for (const entry of list) {
+    if (!entry || typeof entry !== "object") continue;
+    const topic = typeof entry.t === "string" ? entry.t.trim() : "";
+    if (!TOPICS.includes(topic)) continue;
+    const weight = Number(entry.w);
+    if (!Number.isFinite(weight) || weight <= 0 || weight > 1) continue;
+    best.set(topic, Math.max(best.get(topic) ?? 0, weight));
+  }
+  if (best.size === 0) return null;
+  const sorted = [...best.entries()]
+    .sort((a, b) => b[1] - a[1] || (a[0] < b[0] ? -1 : 1))
+    .slice(0, GOAL_TOPIC_LIMIT);
+  const sum = sorted.reduce((acc, [, w]) => acc + w, 0);
+  if (!(sum > 0)) return null;
+  const rounded = sorted.map(([t, w]) => ({ t, w: Math.round((w / sum) * 1000) / 1000 }));
+  const drift = 1 - rounded.reduce((acc, entry) => acc + entry.w, 0);
+  rounded[0].w = Math.max(0, Math.round((rounded[0].w + drift) * 1000) / 1000);
+  return rounded;
 }
 
 function validateNarrative(raw, allowed) {

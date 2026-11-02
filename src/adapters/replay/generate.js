@@ -4,7 +4,6 @@ import { mkdirSync, writeFileSync } from "node:fs";
 import { dirname } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import { DAY_MS, PROFILE_ID, TOPICS } from "../../core/constants.js";
-import { parseGoalText } from "../../core/index.js";
 
 export const REPLAY_SEED = 20261102;
 // 虚拟时钟起点（UTC），与程序运行当天无关：回放不能拿真实日期替代记录时间。
@@ -236,21 +235,31 @@ function pickFrom(rng, list) {
   return list[Math.min(list.length - 1, Math.floor(rng() * list.length))];
 }
 
+// 合成回放里的三版目标：**故意不调用 parseGoalText**。
+// fixture 是可提交的固定数据，一旦它依赖目标解析算法，调整算法就等于要求重新生成 fixture，
+// determinism 测试会从"回放可复现"退化成"改算法必须改数据"。这里把目标内容冻结成数据本身。
+// 三版目标依次演示"目标随时间改变，但推荐输出没跟着变"（见 goal_shift_output_unchanged 场景）。
 const GOAL_LINES = [
   {
     day: 0,
     text: "就是想放松一下，刷刷游戏和番剧",
     intent: "relax",
+    exploration: 0.4,
+    topics: [{ t: "game", w: 0.5018 }, { t: "anime", w: 0.4982 }],
   },
   {
     day: 4,
     text: "想提升编程和 AI 工具的能力",
     intent: "skill",
+    exploration: 0.6,
+    topics: [{ t: "tech", w: 1 }],
   },
   {
     day: 9,
     text: "准备期末考试，想系统复习",
     intent: "exam",
+    exploration: 0.3,
+    topics: [{ t: "study", w: 1 }],
   },
 ];
 
@@ -346,12 +355,19 @@ export function buildRecords(options = {}) {
 
   for (let i = 0; i < GOAL_LINES.length; i += 1) {
     const line = GOAL_LINES[i];
-    const profile = parseGoalText(line.text, line.intent, {
+    // 字段顺序与 GoalProfile 契约一致，保证同一 seed 逐字节可复现。
+    goals.push({
+      type: "goal",
       profile_id: PROFILE_ID,
+      goal_text: line.text,
+      intent_mode: line.intent,
+      goal_topics: line.topics,
+      exclusions: [],
+      exploration_level: line.exploration,
       updated_at: REPLAY_START_MS + line.day * DAY_MS,
       version: i + 1,
+      source: "fallback",
     });
-    goals.push(Object.assign({ type: "goal" }, profile));
   }
 
   const records = [];
