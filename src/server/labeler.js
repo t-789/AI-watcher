@@ -1,10 +1,16 @@
 import { createHash } from "node:crypto";
+import { TOPICS, TOPIC_LABELS } from "../core/constants.js";
 
 const DEFAULT_BATCH = 8;
 const MAX_EVIDENCE = 12;
 const MAX_SUGGESTIONS = 3;
 
 // 规则 → 建议动作的固定映射：降级叙述也不凭空造动作。
+const SUGGESTION_ACTIONS = new Set(["search", "watch_other_source", "platform_feedback", "keep"]);
+const SUGGESTION_BASES = new Set(["topic", "repetition", "none"]);
+// B 站搜索页：窗口里没有该主题内容时的落地页，界面上要标明"去搜索"而不是"你看过的"。
+const SEARCH_BASE = "https://search.bilibili.com/all?keyword=";
+
 const RULE_ACTION = Object.freeze({
   output_concentration: "search",
   goal_gap: "search",
@@ -105,8 +111,8 @@ export function createLabeler(options = {}) {
     return applyLabels(list);
   }
 
-  async function narrative(snapshot, goal) {
-    const key = narrativeKey(snapshot, goal);
+  async function narrative(snapshot, goal, candidates = []) {
+    const key = narrativeKey(snapshot, goal, candidates);
     if (narrativeCache.key === key && narrativeCache.value) {
       narrativeCache.lastCached = true;
       return { ...narrativeCache.value, narrative_cached: true, narrative_at: narrativeCache.at };
@@ -115,16 +121,20 @@ export function createLabeler(options = {}) {
     const summary = summarise(snapshot, goal);
     let result = null;
     try {
-      result = await ai.narrative({ evidence, summary });
+      // 叙述 / 建议 / 推荐理由一次请求产出：候选由确定性排序先给出，AI 只能为它们写理由。
+      result = await ai.narrative({ evidence, summary, goal: goal?.text ?? "", candidates });
     } catch (error) {
       log("[labeler] narrative failed:", error?.message ?? error);
       result = null;
     }
     const modelNarrative = typeof result?.narrative === "string" ? result.narrative : "";
-    const suggestions = Array.isArray(result?.suggestions) && result.suggestions.length ? result.suggestions : alertSuggestions(snapshot);
+    const rawSuggestions = Array.isArray(result?.suggestions) && result.suggestions.length ? result.suggestions : alertSuggestions(snapshot);
+    // 模型有可能会给"补充时事类内容"却挂上游戏视频当证据；主题校验一律在服务端做。
+    const suggestions = sanitiseSuggestions(rawSuggestions, snapshot);
     const value = {
       narrative: modelNarrative || templateNarrative(summary),
       suggestions: suggestions.slice(0, MAX_SUGGESTIONS),
+      reasons: Array.isArray(result?.reasons) ? result.reasons : [],
       model: result?.model ?? ai.model ?? null,
       cached: Boolean(result?.cached),
       // 只要叙述不是模型产出的，就明确标降级，界面据此披露
@@ -138,6 +148,106 @@ export function createLabeler(options = {}) {
       narrativeCache.lastCached = false;
     }
     return { ...value, narrative_cached: false, narrative_at: narrativeCache.at };
+  }
+
+  // 内容 → 主题集合：判断"这条证据是不是该建议讲的那个主题"
+  function topicIndex() {
+    const map = new Map();
+    for (const item of safeList(() => store.getItems())) {
+      if (!item?.content_id) continue;
+      const set = new Set((Array.isArray(item.topics) ? item.topics : []).map((entry) => entry?.t).filter(Boolean));
+      map.set(item.content_id, set);
+    }
+    return map;
+  }
+
+  // 窗口内每条内容被曝光的次数：basis="repetition" 只能引用真的重复出现过的条目
+  function repeatCounts(snapshot) {
+    const start = Number(snapshot?.window?.start);
+    const end = Number(snapshot?.window?.end);
+    const counts = new Map();
+    for (const exposure of safeList(() => store.getExposures())) {
+      const id = exposure?.content_id;
+      if (!id) continue;
+      const at = Number(exposure.exposed_at);
+      if (Number.isFinite(start) && Number.isFinite(end) && !(at >= start && at < end)) continue;
+      counts.set(id, (counts.get(id) ?? 0) + 1);
+    }
+    return counts;
+  }
+
+  // 窗口内属于该主题、确有曝光的内容，按曝光次数降序 + content_id 升序（确定性）。
+  function topicEvidence(topic, topics, repeats, limit) {
+    const rows = [];
+    for (const [contentId, set] of topics) {
+      if (!set.has(topic)) continue;
+      const count = repeats.get(contentId) ?? 0;
+      if (!count) continue; // 没被曝光过的不算"你看过的内容"
+      const item = store.getItem(contentId);
+      if (!item?.url) continue;
+      rows.push({ content_id: contentId, title: item.title ?? "", url: item.url, count });
+    }
+    rows.sort((a, b) => b.count - a.count || (a.content_id < b.content_id ? -1 : 1));
+    return rows.slice(0, limit);
+  }
+
+  // 建议与证据必须同主题；同主题内容不存在时改成搜索链接，而不是拉不相干的条目凑数。
+  function sanitiseSuggestions(raw, snapshot) {
+    const rows = Array.isArray(raw) ? raw : [];
+    if (!rows.length) return [];
+    const topics = topicIndex();
+    const repeats = repeatCounts(snapshot);
+    const out = [];
+    for (const row of rows) {
+      const title = clipText(row?.title, 20);
+      if (!title) continue;
+      const topic = TOPICS.includes(row?.topic) ? row.topic : null;
+      let ids = Array.isArray(row?.evidence_ids) ? row.evidence_ids.filter((id) => typeof id === "string") : [];
+      let basis = SUGGESTION_BASES.has(row?.basis) ? row.basis : null;
+      if (!basis) {
+        if (topic) basis = "topic";
+        else if (ids.length && ids.every((id) => (repeats.get(id) ?? 0) > 1)) basis = "repetition";
+        else basis = "none";
+      }
+      if (basis === "topic") {
+        if (!topic) basis = "none";
+        else ids = ids.filter((id) => topics.get(id)?.has(topic));
+      } else if (basis === "repetition") {
+        ids = ids.filter((id) => (repeats.get(id) ?? 0) > 1);
+        if (!ids.length) basis = "none";
+      } else {
+        basis = "none";
+      }
+      if (basis === "none") continue; // 既说不清主题、也没有重复依据：整条丢弃，不留空壳
+      const entry = {
+        title,
+        why: clipText(row?.why, 60) ?? "",
+        action: SUGGESTION_ACTIONS.has(row?.action) ? row.action : "search",
+        topic,
+        basis,
+        evidence_ids: ids.slice(0, 4),
+      };
+      if (basis === "repetition") {
+        // 重复类建议要能看见"重复了几次"，否则用户无从判断这条凭什么是重复。
+        entry.evidence = ids.slice(0, 4).map((id) => {
+          const item = store.getItem(id);
+          return { content_id: id, title: item?.title ?? "", url: item?.url ?? "", count: repeats.get(id) ?? 0 };
+        });
+      }
+      if (basis === "topic" && ids.length === 0) {
+        // 窗口里可能确实有该主题的内容，只是没进模型看到的证据池：优先补真内容，找不到才给搜索链接。
+        const filled = topicEvidence(topic, topics, repeats, 2);
+        if (filled.length) {
+          entry.evidence_ids = filled.map((row) => row.content_id);
+          entry.evidence = filled;
+        } else {
+          entry.search = searchFor(topic);
+        }
+      }
+      out.push(entry);
+      if (out.length >= MAX_SUGGESTIONS) break;
+    }
+    return out;
   }
 
   function annotationCounts() {
@@ -184,7 +294,7 @@ export function createLabeler(options = {}) {
 
 // 指纹只取"数据本身"：窗口按天量化，否则每次请求 now 都变、缓存永远不命中。
 // 曝光数/内容数/行为数的任何变化都会立刻改变指纹，所以量化不会掩盖真实数据变化。
-function narrativeKey(snapshot, goal) {
+function narrativeKey(snapshot, goal, candidates = []) {
   const window = snapshot?.window ?? {};
   const bucket = typeof window.days === "number" && window.days > 0 ? window.days * 86400000 : 0;
   const quantise = (value) => (Number.isFinite(value) && bucket ? Math.floor(value / bucket) : value ?? "");
@@ -210,6 +320,8 @@ function narrativeKey(snapshot, goal) {
     alerts.join("|"),
     goal?.version ?? "",
     topics.join(","),
+    // 候选变了，推荐理由就必须重算——否则会给出与当前候选对不上的解释。
+    candidates.map((entry) => entry?.content_id ?? "").join(","),
   ];
   return createHash("sha1").update(parts.join("\u0001")).digest("hex");
 }
@@ -268,6 +380,58 @@ function templateNarrative(summary) {
   return parts.join("");
 }
 
+function searchFor(topic) {
+  const keyword = TOPIC_LABELS[topic] ?? topic;
+  return { keyword, url: SEARCH_BASE + encodeURIComponent(keyword) };
+}
+
+function safeList(fn) {
+  try {
+    const value = fn();
+    return Array.isArray(value) ? value : [];
+  } catch {
+    return [];
+  }
+}
+
+function topGoalTopic(snapshot) {
+  const topics = Array.isArray(snapshot?.goal?.topics) ? snapshot.goal.topics : [];
+  return topics.length ? topics[0].t : null;
+}
+
+function topExposureTopic(snapshot) {
+  const topics = Array.isArray(snapshot?.exposure?.topics) ? snapshot.exposure.topics : [];
+  return topics.length ? topics[0].t : null;
+}
+
+function topGapTopic(cmp) {
+  const rows = Array.isArray(cmp?.by_topic) ? cmp.by_topic : [];
+  let best = null;
+  for (const row of rows) {
+    const diff = Number(row?.diff);
+    if (!row?.t || !Number.isFinite(diff) || diff <= 0) continue;
+    if (!best || diff > best.diff) best = { t: row.t, diff };
+  }
+  return best ? best.t : null;
+}
+
+// 兜底建议也要能被主题校验：能确定主题就给主题，重复类走向 repetition，都不行就交给 sanitise 丢弃。
+function alertSuggestionTopic(alert, snapshot) {
+  switch (alert?.rule_id) {
+    case "goal_gap":
+      return topGoalTopic(snapshot);
+    case "behavior_gap":
+      return topGapTopic(snapshot?.behavior_cmp) ?? topExposureTopic(snapshot);
+    case "source_concentration":
+    case "output_concentration":
+      return topGoalTopic(snapshot) ?? topExposureTopic(snapshot);
+    case "narrowing":
+      return topGoalTopic(snapshot);
+    default:
+      return null;
+  }
+}
+
 function alertSuggestions(snapshot) {
   const out = [];
   for (const alert of Array.isArray(snapshot?.alerts) ? snapshot.alerts : []) {
@@ -276,10 +440,14 @@ function alertSuggestions(snapshot) {
       .map((entry) => entry?.content_id)
       .filter((id) => typeof id === "string");
     if (!evidenceIds.length) continue; // 没有证据就不出建议
+    const repetition = alert.rule_id === "repeat_heavy";
+    const topic = repetition ? null : alertSuggestionTopic(alert, snapshot);
     out.push({
       title: clipText(alert.title, 20) ?? "",
       why: clipText(alert.detail ?? alert.suggestion, 60) ?? "",
       action: RULE_ACTION[alert.rule_id] ?? "keep",
+      topic,
+      basis: repetition ? "repetition" : topic ? "topic" : "none",
       evidence_ids: [...new Set(evidenceIds)].slice(0, 4),
     });
   }

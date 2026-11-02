@@ -181,6 +181,18 @@ test("目标输入草稿常驻，重绘不丢；有手动刷新与 renderSeq", (
   return "草稿 + dirty + renderSeq + 手动刷新";
 });
 
+test("建议的搜索链接与视频链接分开渲染，且不硬编码搜索地址", () => {
+  const src = read("extension/content/overlay.js");
+  assert(/sug.search && sug.search.url/.test(src), "未渲染 sug.search");
+  assert(/search.dataset.role = "search-link"/.test(src), "搜索链接缺少 data-role 标记（无法与视频链接区分）");
+  assert(/去搜索：/.test(src), "搜索链接文案未标明「去搜索」");
+  assert(src.includes('aw-ev a[data-role="search-link"] { color: #8a4a08'), "搜索链接没有独立样式");
+  assert(!/search\.bilibili\.com/.test(src), "扩展里不该硬编码搜索地址，应由服务端给出");
+  // 建议区的证据必须经 titleMap 命中才渲染，不能拿 alert 证据兜底冒充"你看过的"
+  assert(/const map = titleMap\(p\);/.test(src), "建议区未使用 titleMap 校验证据");
+  return "搜索链接独立样式 + 地址来自服务端";
+});
+
 const failures = [];
 let passed = 0;
 for (const { name, fn } of cases) {

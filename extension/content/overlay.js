@@ -29,7 +29,8 @@
   host.dataset.renderSeq = "0";
   const shadow = host.attachShadow({ mode: "open" });
   const styleEl = document.createElement("style");
-  styleEl.textContent = STYLE;
+  // 搜索链接与视频链接必须一眼可区分：单独追加一条规则，避免改动上面那段巨型单行样式。
+  styleEl.textContent = STYLE + '\n.aw-ev a[data-role="search-link"] { color: #8a4a08; border-bottom: 1px dashed #c9a06a; }';
   shadow.appendChild(styleEl);
 
   const styleEl2 = document.createElement("style");
@@ -531,10 +532,20 @@
       item.appendChild(h("div", "aw-sug-title", trunc(sug.title || "建议", 20)));
       if (sug.why) item.appendChild(h("div", "aw-muted", trunc(sug.why, 60)));
       const links = h("div", "aw-ev");
+      const resolved = Array.isArray(sug.evidence) && sug.evidence.length ? sug.evidence : null;
       for (const id of sug.evidence_ids || []) {
-        const hit = map.get(id);
+        const hit = resolved ? resolved.find((row) => row.content_id === id) ?? null : map.get(id);
         if (hit && hit.url) links.appendChild(link(hit.url, hit.title));
         else if (hit && hit.title) links.appendChild(h("span", "aw-muted", trunc(hit.title, 26)));
+      }
+      // 与视频链接刻意区分：这是"去搜索"，不是你看过的内容。窗口里没有该主题内容时才出现。
+      if (sug.search && sug.search.url) {
+        const search = link(sug.search.url, "去搜索：" + (sug.search.keyword || "相关主题"));
+        if (search) {
+          search.dataset.role = "search-link";
+          search.title = "去 B 站搜索「" + (sug.search.keyword || "") + "」（不是你看过的内容）";
+          links.appendChild(search);
+        }
       }
       if (links.childNodes.length) item.appendChild(links);
       sec.appendChild(item);

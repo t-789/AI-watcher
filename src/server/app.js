@@ -2,19 +2,7 @@ import { createHash } from "node:crypto";
 // TOPICS 是契约 §1 冻结的表（数据，不是行为模块）；store / labeler / analyze / clock 全部走 deps 注入。
 import { TOPICS, CONTRACT_VALUES, normaliseTopics, clipText } from "./ai.js";
 
-// 契约 §10.3：why 只对"已定序"的候选写一句理由，最多 3 条 → 一次请求最多 8 条（含余量）。
-const WHY_BASE_URL = "https://api.deepseek.com/chat/completions";
-const WHY_MODEL = "deepseek-chat";
-const WHY_TIMEOUT_MS = 20_000;
-const WHY_MAX = 8;
-const WHY_MAX_CHARS = 40;
-const WHY_SYSTEM_PROMPT = [
-  "你是推荐解释器，只输出一个 JSON 对象，不要解释、不要 markdown 代码块。",
-  '输入：{"goal":用户目标原文,"items":[{"content_id":id,"title":标题,"page_context":"home|video_related|search","basis":{"goal_match":0到1,"fills_gap":0到1,"source_diversity":0到1,"novelty":0到1}}]}',
-  '输出：{"reasons":[{"content_id":id,"why":"不超过40字"}]}',
-  "why 必须基于给出的 basis 与目标来解释，例如「更接近你想学的方向」「这个 UP 主你很少看」；",
-  "禁止编造链接、数字、标题或引文；禁止新增/删除条目；不要评价内容质量好坏。",
-].join("\n");
+const MAX_WHY_CHARS = 40; // 与 ai.js 的 reasons 同口径
 
 const PLATFORM = "bilibili";
 const PAGE_CONTEXTS = new Set(["home", "search", "video_related"]);
@@ -234,6 +222,13 @@ export function createApp(deps = {}) {
     }
     if (!snapshot || typeof snapshot !== "object") return sendCoreUnavailable(res, new Error("empty snapshot"));
 
+    // 顺序很关键：候选必须由确定性排序先定下来，才能和叙述/建议塞进同一次请求。
+    let candidates = [];
+    try {
+      candidates = await rankCandidates({ items, exposures, actions, goal, now, windowDays: days });
+    } catch {
+      candidates = [];
+    }
     let ai = {
       narrative: "",
       suggestions: [],
@@ -243,8 +238,9 @@ export function createApp(deps = {}) {
       narrative_cached: false,
       narrative_at: null,
     };
+    let reasons = [];
     try {
-      const result = await labeler.narrative(snapshot, goal);
+      const result = await labeler.narrative(snapshot, goal, candidates);
       if (result && typeof result === "object") {
         ai = {
           narrative: typeof result.narrative === "string" ? result.narrative : "",
@@ -255,12 +251,13 @@ export function createApp(deps = {}) {
           narrative_cached: Boolean(result.narrative_cached),
           narrative_at: result.narrative_at ?? null,
         };
+        reasons = Array.isArray(result.reasons) ? result.reasons : [];
       }
     } catch {
       // 叙述失败不影响统计主体：保持降级 ai 字段照常返回
     }
-    // 契约 §10.3：推荐列表只增字段；排序由确定性代码做，AI 只写 why（失败/无 key → why 为 null）
-    const recommendations = await buildRecommendations({ items, exposures, actions, goal, now, windowDays: days }, snapshot);
+    // 契约 §10.3：推荐列表只增字段；顺序/条目/url 仍以确定性排序为准，AI 只写 why
+    const recommendations = await attachReasons(candidates, reasons, snapshot);
     // 标注进度必须随画像一起返回，界面才能区分"AI 正在标注"和"AI 标不出来"
     const progress = safeLabelerStatus(labeler);
     sendJSON(res, 200, {
@@ -413,11 +410,9 @@ export function createApp(deps = {}) {
     await handler(req, res, url);
   }
 
-  // 契约 §10.2/§10.3：排序属于确定性代码（src/core/recommend.js），服务层只负责调用 + 让 AI 补 why。
-  // main.js 不在本次改动范围，所以排序函数优先取注入实现，缺省时动态 import core（失败则该字段返回空数组）。
-  const whyCache = new Map();
-
-  async function buildRecommendations(input, snapshot) {
+  // 契约 §10.2/§10.3：排序属于确定性代码（src/core/recommend.js），服务层只挑候选，
+  // 理由由 labeler 那一次合并请求产出（app.js 不再自己发 LLM 请求）。
+  async function rankCandidates(input) {
     let rank = typeof deps.rankRecommendations === "function" ? deps.rankRecommendations : null;
     if (!rank) {
       try {
@@ -435,81 +430,27 @@ export function createApp(deps = {}) {
       return [];
     }
     if (!Array.isArray(list) || list.length === 0) return [];
-    const safe = list
+    // 只挑出可展示的候选（有 id、有 url），顺序完全由 rank 决定。
+    return list
       .slice(0, 3)
       .filter((entry) => entry && typeof entry.content_id === "string" && typeof entry.url === "string" && entry.url);
-    if (safe.length === 0) return [];
-    const reasons = await whyFor(safe, snapshot);
-    // 顺序、条目、url 一律以确定性排序结果为准；AI 只能填 why。
-    return safe.map((entry) => ({ ...entry, why: reasons.get(entry.content_id) ?? null }));
   }
 
-  async function whyFor(list, snapshot) {
-    const none = new Map();
-    const key = createHash("sha1")
-      .update(JSON.stringify(list.map((entry) => [entry.content_id, entry.basis, entry.page_context])))
-      .digest("hex");
-    if (whyCache.has(key)) return whyCache.get(key);
-
+  // 理由来源优先级：注入实现（测试/自定义）> 合并请求里 AI 写的那份 > null。
+  // 三种情况都不改变候选顺序、条目与 url，也不发额外请求。
+  async function attachReasons(list, reasons, snapshot) {
+    if (list.length === 0) return [];
+    let map = new Map();
     if (typeof deps.recommendWhy === "function") {
       try {
-        const injected = await deps.recommendWhy({ recommendations: list, goal: snapshot?.goal ?? null });
-        const map = normaliseWhy(injected, list);
-        whyCache.set(key, map);
-        return map;
+        map = normaliseWhy(await deps.recommendWhy({ recommendations: list, goal: snapshot?.goal ?? null }), list);
       } catch {
-        return none;
+        map = new Map();
       }
+    } else if (Array.isArray(reasons) && reasons.length) {
+      map = normaliseWhy({ reasons }, list);
     }
-
-    const apiKey = String(process.env.DEEPSEEK_API_KEY ?? "").trim();
-    if (!apiKey) return none;
-    const payload = {
-      goal: snapshot?.goal?.text ?? "",
-      items: list.slice(0, WHY_MAX).map((entry) => ({
-        content_id: entry.content_id,
-        title: clipText(entry.title, 60) ?? "",
-        page_context: entry.page_context ?? "",
-        basis: entry.basis ?? {},
-      })),
-    };
-    try {
-      const response = await fetch(WHY_BASE_URL, {
-        method: "POST",
-        headers: { "content-type": "application/json", authorization: "Bearer " + apiKey },
-        body: JSON.stringify({
-          model: WHY_MODEL,
-          temperature: 0,
-          response_format: { type: "json_object" },
-          stream: false,
-          messages: [
-            { role: "system", content: WHY_SYSTEM_PROMPT },
-            { role: "user", content: JSON.stringify(payload) },
-          ],
-        }),
-        signal: AbortSignal.timeout(WHY_TIMEOUT_MS),
-      });
-      if (!response.ok) return none;
-      const body = await response.json();
-      const map = normaliseWhy(parseWhyContent(body?.choices?.[0]?.message?.content ?? ""), list);
-      whyCache.set(key, map);
-      return map;
-    } catch {
-      return none;
-    }
-  }
-
-  function parseWhyContent(content) {
-    const text = String(content ?? "").trim();
-    const from = text.indexOf("{");
-    const to = text.lastIndexOf("}");
-    const jsonText = from >= 0 && to > from ? text.slice(from, to + 1) : text;
-    try {
-      const parsed = JSON.parse(jsonText);
-      return parsed && typeof parsed === "object" ? parsed : null;
-    } catch {
-      return null;
-    }
+    return list.map((entry) => ({ ...entry, why: map.get(entry.content_id) ?? null }));
   }
 
   function normaliseWhy(raw, list) {
@@ -520,7 +461,7 @@ export function createApp(deps = {}) {
       if (!row || typeof row !== "object") continue;
       const id = typeof row.content_id === "string" ? row.content_id : "";
       if (!allowed.has(id) || out.has(id)) continue; // 不许新增条目
-      const why = clipText(typeof row.why === "string" ? row.why.trim() : "", WHY_MAX_CHARS);
+      const why = clipText(typeof row.why === "string" ? row.why.trim() : "", MAX_WHY_CHARS);
       if (!why) continue;
       out.set(id, why);
     }

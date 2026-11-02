@@ -37,8 +37,13 @@ const CONTENT_TYPES = new Set(["评测", "教程", "资讯", "vlog", "娱乐", "
 const EVIDENCE_LEVELS = new Set(["weak", "medium", "strong"]);
 const TIMELINESS = new Set(["recent", "dated", "unknown"]);
 const SUGGESTION_ACTIONS = new Set(["search", "watch_other_source", "platform_feedback", "keep"]);
+// basis 决定证据该如何被校验：topic=必须是该主题的内容，repetition=必须是重复曝光的条目，none=丢弃。
+const SUGGESTION_BASIS = new Set(["topic", "repetition", "none"]);
 
 const MAX_EVIDENCE = 12;
+const MAX_CANDIDATES = 8;
+const MAX_REASONS = 8;
+const MAX_WHY_CHARS = 40;
 
 // 降级词典：无 key / 请求失败时只用关键词兜底，不伪装成模型判断。
 const KEYWORDS = Object.freeze({
@@ -64,9 +69,12 @@ const LABEL_SYSTEM_PROMPT = [
 
 const NARRATIVE_SYSTEM_PROMPT = [
   "你是推荐内容观察助手，只输出一个 JSON 对象，不要解释、不要 markdown 代码块。",
-  '输入：{"summary":统计摘要,"evidence":[{"content_id":证据 id,"title":标题,"at":时间}]}',
-  '输出：{"narrative":"不超过200字","suggestions":[{"title":"不超过20字","why":"不超过60字","action":"search|watch_other_source|platform_feedback|keep","evidence_ids":["content_id"]}]}',
-  "建议最多 3 条。evidence_ids 只能从输入的 evidence 里选，禁止编造链接、标题或引文。没有证据就不要给建议。",
+  '输入：{"summary":统计摘要,"evidence":[{"content_id":证据 id,"title":标题,"at":时间}],"goal":"用户目标原文","candidates":[{"content_id":候选 id,"title":标题,"page_context":"home|video_related|search","basis":{"goal_match":0到1,"fills_gap":0到1,"source_diversity":0到1,"novelty":0到1}}]}',
+  '输出：{"narrative":"不超过200字","suggestions":[{"title":"不超过20字","why":"不超过60字","action":"search|watch_other_source|platform_feedback|keep","topic":"主题 id 或 null","basis":"topic|repetition|none","evidence_ids":["content_id"]}],"reasons":[{"content_id":"candidates 里的 id","why":"不超过40字"}]}',
+  "reasons 只解释 candidates 里的候选为什么值得看，必须基于给出的 basis；不得新增候选、不得改变顺序、不得编造链接或标题。",
+  "建议最多 3 条。evidence_ids 只能从输入的 evidence 里选，禁止编造链接、标题或引文。",
+  "每条建议必须说明它针对哪个主题(topic)；说不清主题、也没有重复曝光依据的，就整条不要给。",
+  "evidence_ids 必须是与该 topic 同主题的内容；如果窗口里根本没有这个主题的内容，把 evidence_ids 留空即可，服务端会改成一个搜索链接。",
   "只描述统计现象，不做心理诊断，不夸大平台因果。",
 ].join("\n");
 
@@ -214,10 +222,17 @@ export function createAI(options = {}) {
     return { topics, model, degraded: false };
   }
 
+  // 一次请求同时产出「画像叙述 + 行动建议 + 推荐理由」：三者永远在同一时机触发，
+  // 拆成两次请求只是白烧一次 token。理由只允许为传入的候选写，顺序与条目由确定性排序决定。
   async function narrative(input) {
     const evidence = (Array.isArray(input?.evidence) ? input.evidence : []).filter((entry) => entry && typeof entry.content_id === "string");
     const allowed = new Set(evidence.map((entry) => entry.content_id));
-    if (mode === "degraded") return { narrative: "", suggestions: [], model, cached: false, degraded: true };
+    const candidates = (Array.isArray(input?.candidates) ? input.candidates : [])
+      .filter((entry) => entry && typeof entry.content_id === "string")
+      .slice(0, MAX_CANDIDATES);
+    const candidateIds = new Set(candidates.map((entry) => entry.content_id));
+    const empty = { narrative: "", suggestions: [], reasons: [], model, cached: false, degraded: true };
+    if (mode === "degraded") return empty;
     counters.narratives += 1;
     const payload = {
       summary: input?.summary ?? {},
@@ -226,6 +241,13 @@ export function createAI(options = {}) {
         title: clipText(entry.title, 80) ?? "",
         at: Number.isFinite(entry.at) ? entry.at : null,
       })),
+      goal: clipText(input?.goal, 200) ?? "",
+      candidates: candidates.map((entry) => ({
+        content_id: entry.content_id,
+        title: clipText(entry.title, 60) ?? "",
+        page_context: entry.page_context ?? "",
+        basis: entry.basis ?? {},
+      })),
     };
     let parsed = null;
     try {
@@ -233,12 +255,12 @@ export function createAI(options = {}) {
     } catch {
       parsed = null;
     }
-    if (!parsed) return { narrative: "", suggestions: [], model, cached: false, degraded: true };
+    if (!parsed) return empty;
     const validated = validateNarrative(parsed, allowed);
-    if (!validated.narrative && validated.suggestions.length === 0) {
-      return { narrative: "", suggestions: [], model, cached: false, degraded: true };
-    }
-    return { ...validated, model, cached: false, degraded: false };
+    const reasons = validateReasons(parsed?.reasons, candidateIds);
+    // 三项互相独立：任何一项不合法只影响它自己，不连坐另外两项。
+    if (!validated.narrative && validated.suggestions.length === 0 && reasons.length === 0) return empty;
+    return { ...validated, reasons, model, cached: false, degraded: false };
   }
 
   return {
@@ -355,6 +377,22 @@ function validateGoalTopics(raw) {
   return rounded;
 }
 
+// 推荐理由：content_id 必须在传入候选里，否则丢弃；why 超长裁到 40 字。
+export function validateReasons(raw, allowedIds) {
+  const out = [];
+  const seen = new Set();
+  for (const row of Array.isArray(raw) ? raw.slice(0, MAX_REASONS) : []) {
+    if (!row || typeof row !== "object") continue;
+    const id = typeof row.content_id === "string" ? row.content_id.trim() : "";
+    if (!id || !allowedIds.has(id) || seen.has(id)) continue;
+    const why = clipText(row.why, MAX_WHY_CHARS);
+    if (!why) continue;
+    seen.add(id);
+    out.push({ content_id: id, why });
+  }
+  return out;
+}
+
 function validateNarrative(raw, allowed) {
   const narrative = clipText(raw?.narrative, 200) ?? "";
   const suggestions = [];
@@ -366,8 +404,10 @@ function validateNarrative(raw, allowed) {
     const action = typeof entry.action === "string" && SUGGESTION_ACTIONS.has(entry.action.trim()) ? entry.action.trim() : null;
     if (!action) continue; // 枚举非法：丢弃该建议而不是替它编一个动作
     const ids = [...new Set((Array.isArray(entry.evidence_ids) ? entry.evidence_ids : []).filter((id) => typeof id === "string" && allowed.has(id)))];
-    if (!ids.length) continue; // 没有合法证据的建议不出
-    suggestions.push({ title, why: clipText(entry.why, 60) ?? "", action, evidence_ids: ids.slice(0, 4) });
+    // 证据为空不再直接丢弃：带上 topic 的建议会由服务端替换成搜索链接（窗口里本来就没有这类内容）。
+    const topic = typeof entry.topic === "string" && TOPICS.includes(entry.topic.trim()) ? entry.topic.trim() : null;
+    const basis = typeof entry.basis === "string" && SUGGESTION_BASIS.has(entry.basis.trim()) ? entry.basis.trim() : null;
+    suggestions.push({ title, why: clipText(entry.why, 60) ?? "", action, topic, basis, evidence_ids: ids.slice(0, 4) });
   }
   return { narrative, suggestions: suggestions.slice(0, 3) };
 }

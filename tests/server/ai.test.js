@@ -203,7 +203,13 @@ test("叙述输出校验：evidence_ids 只能来自传入证据，非法枚举/
     assert.ok(["search", "watch_other_source", "platform_feedback", "keep"].includes(suggestion.action));
     assert.deepEqual(suggestion.evidence_ids, [...new Set(suggestion.evidence_ids)]);
   }
-  assert.deepEqual(result.suggestions.map((entry) => entry.title), ["换来源看", "主动搜索", "第四条"]);
+  // 契约 v1.1：AI 层不再因为"证据为空"就丢弃建议——带 topic 的建议会由 labeler 换成搜索链接。
+  // 这里只断言 AI 层的职责：枚举非法丢弃、凭空 id 被过滤、上限 3 条。
+  assert.deepEqual(result.suggestions.map((entry) => entry.title), ["换来源看", "凭空建议", "主动搜索"]);
+  const fabricated = result.suggestions.find((entry) => entry.title === "凭空建议");
+  assert.deepEqual(fabricated.evidence_ids, [], "凭空 id 必须被过滤掉");
+  assert.equal(fabricated.topic, null, "没给主题就没主题");
+  assert.equal(fabricated.basis, null, "没给 basis 就留给下层判定");
   assert.equal(fetchImpl.calls.length, 1);
   assert.equal(fetchImpl.calls[0].body.temperature, 0);
   assert.deepEqual(fetchImpl.calls[0].body.response_format, { type: "json_object" });
@@ -215,7 +221,8 @@ test("无 key 时叙述降级：不请求、narrative 为空、degraded=true", a
   t.after(() => cleanup(dir));
   const ai = createAI({ apiKey: "", cachePath: join(dir, "n.jsonl"), fetchImpl: async () => { throw new Error("不该发请求"); } });
   const result = await ai.narrative({ evidence: [{ content_id: "c1" }], summary: {} });
-  assert.deepEqual(result, { narrative: "", suggestions: [], model: "deepseek-chat", cached: false, degraded: true });
+  // reasons 是合并请求后新增的字段：降级时为空数组，形状变化是有意的
+  assert.deepEqual(result, { narrative: "", suggestions: [], reasons: [], model: "deepseek-chat", cached: false, degraded: true });
 });
 
 test("labeler：enqueue → labelNow 写回 items（topics + annotation），status 报 cache_hits/requests", async (t) => {
@@ -259,7 +266,31 @@ test("labeler 降级叙述：模板句 + 只用 alerts 的 evidence_ids", async 
   assert.equal(result.degraded, true);
   assert.ok(result.narrative.includes("120"), "模板句只用已有统计数字");
   assert.equal(result.suggestions.length, 1, "没有 evidence 的 alert 不出建议");
-  assert.deepEqual(result.suggestions[0].evidence_ids, ["c1", "c2"]);
   assert.equal(result.suggestions[0].action, "watch_other_source");
   assert.ok([...result.suggestions[0].title].length <= 20);
+  // 契约 v1.1：证据必须能在库里验明属于该主题；这里 store 是空的，验不了 → 证据清空 + 改搜索链接。
+  assert.equal(result.suggestions[0].topic, "tech");
+  assert.equal(result.suggestions[0].basis, "topic");
+  assert.deepEqual(result.suggestions[0].evidence_ids, []);
+  assert.equal(result.suggestions[0].search.keyword, "科技·AI·数码");
+});
+
+test("labeler 降级叙述：库里能验明主题的证据才保留，不换搜索链接", async (t) => {
+  const dir = tempDir("labeler-narrative-verified");
+  t.after(() => cleanup(dir));
+  const store = createFakeStore();
+  store.upsertItem({ content_id: "c1", title: "显卡评测", topics: [{ t: "tech", w: 1 }], annotation: { status: "ai" } });
+  store.upsertItem({ content_id: "c2", title: "游戏实况", topics: [{ t: "game", w: 1 }], annotation: { status: "ai" } });
+  const ai = createAI({ apiKey: "", cachePath: join(dir, "n.jsonl") });
+  const labeler = createLabeler({ store, ai });
+  const snapshot = {
+    window: { start: 0, end: 86400000 * 7, days: 7, exposure_count: 120, unique_items: 80, action_count: 12, known_topic_ratio: 0.9, unknown_topic_ratio: 0.1 },
+    exposure: { available: true, topics: [{ t: "tech", w: 0.7, n: 80 }], entropy: 0.42, repeat_rate: 0.33, unique_items: 80, top_source: { id: "1", name: "数码UP", n: 40, share: 0.5 }, source_count: 6 },
+    alerts: [
+      { rule_id: "source_concentration", severity: "warn", title: "来源集中", detail: "单一来源占 50%", evidence: [{ content_id: "c1", title: "显卡评测", url: "u", at: 1 }, { content_id: "c2", title: "游戏实况", url: "u2", at: 2 }] },
+    ],
+  };
+  const result = await labeler.narrative(snapshot, null);
+  assert.deepEqual(result.suggestions[0].evidence_ids, ["c1"], "游戏内容不能当科技建议的证据");
+  assert.equal(result.suggestions[0].search, undefined);
 });
