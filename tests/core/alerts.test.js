@@ -206,3 +206,33 @@ test("门槛不满足时六条规则都不触发，并在 notes 里逐条写清�
   }
   assert.ok(joined.includes("曝光样本 5 条"));
 });
+
+test("goal_gap 文案：gap 主题在目标里约等于 0 → 「目标却没提到」", () => {
+  const items = itemsOnePer(["tech", "study"]);
+  const goalStudy = { goal_text: "备考", intent_mode: "exam", goal_topics: [{ t: "study", w: 1 }], source: "fallback" };
+  const s = snap({ items, exposures: planExposures([["i_tech", 30]]), goal: goalStudy });
+  const alert = alertOf(s, "goal_gap");
+  assert.ok(alert);
+  assert.ok(alert.detail.includes("目标却没提到的是 科技·AI·数码"), "实际文案：" + alert.detail);
+  assert.ok(!alert.detail.includes("目标里只占"), "g≈0 时不该出现「目标里只占」的措辞");
+});
+
+test("goal_gap 文案：gap 主题目标里已占 25% → 点明「只占 25%」，不得说成「没提到」", () => {
+  const items = itemsOnePer(["game", "news", "science"]);
+  const exposures = planExposures([["i_game", 18], ["i_news", 2]]);
+  const goal = { goal_text: "放松一点，顺便学点科学", intent_mode: "relax", goal_topics: [{ t: "science", w: 0.75 }, { t: "game", w: 0.25 }], source: "ai" };
+  const s = snap({ items, exposures, goal });
+  assert.ok(s.goal_cmp.D > T.gapDistance, "D 应过门槛，实际 " + s.goal_cmp.D);
+  const gapEntry = s.goal_cmp.by_topic.find((e) => e.t === "game");
+  assert.equal(gapEntry.g, 0.25, "该用例必须落在「目标里有这个主题」的分支");
+  const alert = alertOf(s, "goal_gap");
+  assert.ok(alert.detail.includes("目标里只占 25%"), "实际文案：" + alert.detail);
+  assert.ok(alert.detail.includes("游戏"), "实际文案：" + alert.detail);
+  assert.ok(!alert.detail.includes("目标却没提到"), "目标里明确有 game 25%，不得说成没提到：" + alert.detail);
+  // 文案不得与 goal.topics 冲突：凡是写了"目标却没提到"的主题，其 g 必须 ≈ 0。
+  const mentioned = /目标却没提到的是 ([^ ]+)/.exec(alert.detail);
+  if (mentioned) {
+    const hit = s.goal_cmp.by_topic.find((e) => e.g > 0 && mentioned[1].includes(e.t));
+    assert.equal(hit, undefined);
+  }
+});

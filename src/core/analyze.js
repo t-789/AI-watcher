@@ -454,6 +454,9 @@ export function buildSnapshot(input = {}) {
 
   if (goalCmp && goalCmp.D !== null && goalCmp.D > T.gapDistance) {
     const gap = topGapTopic(goalCmp.by_topic, "g");
+    // gap 取的是 (p-g) 最大的主题，不管 g 是否为 0：文案必须按 g 的实际权重分档，
+    // 否则会在目标里明明写了这个主题时，说成"目标却没提到"。
+    const gapG = Number(gap?.g ?? 0);
     const goalTop = goalTopics[0] ?? null;
     let goalShare = 0;
     if (goalTop) for (const entry of goalCmp.by_topic) if (entry.t === goalTop.t) goalShare = entry.p;
@@ -464,7 +467,12 @@ export function buildSnapshot(input = {}) {
       detail:
         "目标分布与曝光分布的差异 D=" + goalCmp.D + "，超过门槛 " + T.gapDistance +
         (goalTop ? "；目标最关注 " + label(goalTop.t) + "（" + pct(goalTop.w) + "）" : "") +
-        (goalTop ? "，它在窗口曝光里只占 " + pct(goalShare) : "") + (gap ? "；曝光占比最高、目标却没提到的是 " + label(gap.t) + " " + pct(gap.p) + "。" : "。"),
+        (goalTop ? "，它在窗口曝光里只占 " + pct(goalShare) : "") +
+        (gap === null
+          ? "。"
+          : gapG < GOAL_MIN_TOPIC_WEIGHT
+            ? "；曝光占比最高、目标却没提到的是 " + label(gap.t) + " " + pct(gap.p) + "。"
+            : "；曝光占比最高、但目标里只占 " + pct(gapG) + " 的是 " + label(gap.t) + "（曝光 " + pct(gap.p) + "）。"),
       evidence: buildEvidence(exp.recs, (r) => Boolean(r.topics) && gap !== null && r.topics.has(gap.t)),
       suggestion: "用目标关键词主动搜索并停留，或把目标描述改成你实际想看的主题；系统只描述已记录的样本差异。",
       thresholds_used: {
